@@ -74,7 +74,7 @@ export class SessionStore {
      * @param {object[]} o.tracks   canciones en su orden natural (sin repetir clave)
      * @param {string} [o.startKey] por cuál empezar
      */
-    start({ source, tracks, startKey = null, shuffle = false }) {
+    start({ source, tracks, startKey = null, shuffle = false, device = null }) {
         const byKey = {};
         const base = [];
         for (const track of tracks) {
@@ -95,8 +95,16 @@ export class SessionStore {
         }
         const id = `s_${randomBytes(5).toString('hex')}`;
         this.session = { id, source, createdAt: this.#iso(), shuffle: Boolean(shuffle), base, order, tracks: byKey };
-        this.state = { id, index, positionMs: 0, repeat: 'off', visit: 0, loggedVisit: -1 };
+        this.state = { id, index, positionMs: 0, repeat: 'off', visit: 0, loggedVisit: -1, device };
         this.#saveSession();
+        this.#saveState();
+        return this.view();
+    }
+
+    // El dispositivo que lleva la sesión: el último que empezó a reproducir o pidió continuar
+    claim(device) {
+        if (!this.session) return null;
+        this.state.device = device ?? null;
         this.#saveState();
         return this.view();
     }
@@ -112,6 +120,7 @@ export class SessionStore {
             shuffle: this.session.shuffle,
             repeat: this.state.repeat,
             positionMs: this.state.positionMs,
+            device: this.state.device ?? null,
             window: {
                 prev: this.#entry(this.#prevIndex()),
                 current: this.#entry(this.state.index),

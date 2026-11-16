@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import spotifyUrlInfo from 'spotify-url-info';
 import yts from 'yt-search';
-import { youtubeThumb } from './sources.js';
-import { fetchPlaylist } from './ytdlp.js';
+import { parseLink, youtubeThumb } from './sources.js';
+import { fetchInfo, fetchPlaylist } from './ytdlp.js';
 
 // Lectores de listas y enlaces de fuera. Punto de partida: utils/spotifyHelper.js y
 // ytdlpWrapper.fetchPlaylistInfo del bot (commit a2a4e99). Copia independiente.
@@ -11,6 +11,20 @@ import { fetchPlaylist } from './ytdlp.js';
 // solo entrega las 100 primeras canciones de cada lista (comprobado el 2026-11-16).
 
 export const SPOTIFY_LIMIT = 100;
+export const SOUNDCLOUD_LIMIT = 100;
+
+// Una canción de SoundCloud tal como la describe yt-dlp → canción de MyMusic (o null si le falta algo)
+function soundcloudEntry(info) {
+    if (!info || !/^\d{1,20}$/.test(String(info.id ?? '')) || !info.title) return null;
+    return {
+        key: `sc:${info.id}`,
+        platform: 'soundcloud',
+        title: String(info.title),
+        artist: info.uploader ?? info.artist ?? null,
+        durationSec: Number.isFinite(info.duration) ? Math.round(info.duration) : null,
+        thumb: typeof info.thumbnail === 'string' ? info.thumbnail : null,
+    };
+}
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
 const spotify = spotifyUrlInfo((...args) => fetch(...args));
 const spotifyId = uri => String(uri ?? '').split(':').pop();
@@ -65,6 +79,33 @@ export const importers = {
             durationSec: seconds(data.duration ?? data.duration_ms),
             thumb: data.coverArt?.sources?.[0]?.url ?? data.visualIdentity?.image?.[0]?.url ?? null,
         };
+    },
+
+    // --- SoundCloud: todo se lee con yt-dlp, como en el bot. La clave de una canción es su número. ---
+
+    async soundcloudTrack({ user, slug }) {
+        return soundcloudEntry(await fetchInfo(`https://soundcloud.com/${user}/${slug}`));
+    },
+
+    // Leer una lista de SoundCloud con sus títulos cuesta unos 0,7 s por canción (medido el 2026-11-16),
+    // y el túnel corta las respuestas a los 100 s: por eso el tope de SOUNDCLOUD_LIMIT canciones.
+    async soundcloudSet({ user, slug }) {
+        const set = await fetchInfo(`https://soundcloud.com/${user}/sets/${slug}`, { playlist: true, limit: SOUNDCLOUD_LIMIT });
+        const tracks = (set.entries ?? []).map(soundcloudEntry).filter(Boolean);
+        return {
+            platform: 'soundcloud',
+            title: String(set.title ?? 'Lista de SoundCloud'),
+            thumb: tracks.find(track => track.thumb)?.thumb ?? null,
+            tracks,
+            truncated: (set.entries ?? []).length >= SOUNDCLOUD_LIMIT,
+        };
+    },
+
+    // on.soundcloud.com/<código> redirige a la dirección de verdad: se mira adónde, sin seguirla a ciegas
+    async soundcloudShort(code) {
+        const res = await fetch(`https://on.soundcloud.com/${code}`, { redirect: 'manual' });
+        const link = parseLink(res.headers.get('location') ?? '');
+        return link?.kind === 'sc-track' || link?.kind === 'sc-playlist' ? link : null;
     },
 
     async youtubeVideo(id) {

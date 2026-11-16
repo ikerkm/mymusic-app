@@ -8,7 +8,7 @@ const num = (v, def) => (v !== undefined && v !== '' && Number.isFinite(Number(v
 // antes de que index.js cargue el .env (lección del bot, 2026-09-18).
 export const config = {
     get root() { return ROOT; },
-    get version() { return '0.3.0'; },
+    get version() { return '0.4.0'; },
     get dataDir() { return process.env.MYMUSIC_DATA || join(ROOT, 'data'); },
     get host() { return process.env.MYMUSIC_HOST || '127.0.0.1'; },
     get port() { return num(process.env.MYMUSIC_PORT, 3100); },
@@ -21,4 +21,10 @@ export const config = {
     get ytdlpJsRuntime() { return process.env.YTDLP_JS_RUNTIME || ''; },
     get ytdlpPlayerClient() { return process.env.YTDLP_PLAYER_CLIENT || ''; },
     get ytdlpCookies() { return process.env.YTDLP_COOKIES || ''; },
+    // Solo se usa para reenvolver el audio de SoundCloud (sin recodificar)
+    get ffmpegPath() { return process.env.FFMPEG_PATH || 'ffmpeg'; },
+    // Nombre de la cuenta del dueño al pasar de la versión de un solo usuario (después se cambia con scripts/users.mjs)
+    get ownerName() { return process.env.MYMUSIC_OWNER_NAME || 'admin'; },
+    // Cuántas canciones se extraen a la vez como mucho; las demás esperan su turno
+    get maxExtractions() { return num(process.env.MYMUSIC_MAX_EXTRACTIONS, 3); },
 };

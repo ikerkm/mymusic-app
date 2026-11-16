@@ -71,6 +71,7 @@ fun MainScreen(vm: AppViewModel) {
                     when (top) {
                         is Overlay.ListDetail -> ListDetailScreen(vm, top.id, state)
                         Overlay.History -> HistoryScreen(vm, state)
+                        Overlay.Settings -> SettingsScreen(vm)
                         else -> when (tab) {
                             Tab.Home -> HomeScreen(vm, state)
                             Tab.Search -> SearchScreen(vm, playingKey = state.track?.key)

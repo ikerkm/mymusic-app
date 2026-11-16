@@ -156,7 +156,7 @@ fun ImportSheet(vm: AppViewModel, list: ListSummary) {
         SheetWindowFix()
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 18.dp).imePadding()) {
             Text("Importar a «${list.name}»", color = Mm.Tx, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Text("Enlace de una lista de Spotify o YouTube", color = Mm.Mut, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp, bottom = 5.dp))
+            Text("Enlace de una lista de Spotify, YouTube o SoundCloud", color = Mm.Mut, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp, bottom = 5.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = link,
@@ -235,12 +235,13 @@ fun ImportSheet(vm: AppViewModel, list: ListSummary) {
                             Text(label, color = Mm.OnAcc, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
-                    if (preview.platform == "spotify") {
-                        Text(
-                            "Las canciones de Spotify se buscan en YouTube la primera vez que suenan." +
-                                if (preview.truncated) " Spotify solo deja leer las 100 primeras canciones de una lista." else "",
-                            color = Mm.Mut, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp),
-                        )
+                    val notes = listOfNotNull(
+                        "Las canciones de Spotify se buscan en YouTube la primera vez que suenan.".takeIf { preview.platform == "spotify" },
+                        // Spotify y SoundCloud solo se dejan leer hasta 100 canciones por lista
+                        "De esta lista solo se pueden leer las 100 primeras canciones.".takeIf { preview.truncated },
+                    )
+                    if (notes.isNotEmpty()) {
+                        Text(notes.joinToString(" "), color = Mm.Mut, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
                     }
                 }
             }

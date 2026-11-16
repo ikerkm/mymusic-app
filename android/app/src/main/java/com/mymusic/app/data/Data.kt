@@ -65,6 +65,7 @@ data class SessionView(
     val shuffle: Boolean,
     val repeat: String,          // off | all | one
     val positionMs: Long,
+    val active: Boolean,         // ¿es este dispositivo el que lleva la sesión? (una por usuario, compartida entre sus dispositivos)
     val prev: Entry?,
     val current: Entry?,
     val next: Entry?,
@@ -82,6 +83,10 @@ class Prefs(context: Context) {
     var serverUrl: String?
         get() = sp.getString("server", null)
         set(value) { sp.edit().putString("server", value).apply() }
+
+    var userName: String?
+        get() = sp.getString("user", null)
+        set(value) { sp.edit().putString("user", value).apply() }
 
     var token: String?
         get() = sp.getString("token", null)
@@ -132,6 +137,7 @@ private fun JSONObject.toSession(): SessionView {
         shuffle = optBoolean("shuffle"),
         repeat = optString("repeat", "off"),
         positionMs = optLong("positionMs"),
+        active = optBoolean("active", true),
         prev = window.entry("prev"),
         current = window.entry("current"),
         next = window.entry("next"),
@@ -146,12 +152,13 @@ class Api(private val prefs: Prefs) {
         body: JSONObject? = null,
         base: String = prefs.serverUrl.orEmpty(),
         token: String? = prefs.token,
+        readTimeoutMs: Int = 30_000,
     ): JSONObject {
         val conn = URL(base + path).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = method
             conn.connectTimeout = 15_000
-            conn.readTimeout = 30_000
+            conn.readTimeout = readTimeoutMs
             conn.setRequestProperty("Accept", "application/json")
             if (token != null) conn.setRequestProperty("Authorization", "Bearer $token")
             if (body != null) {
@@ -170,18 +177,24 @@ class Api(private val prefs: Prefs) {
         }
     }
 
-    private suspend fun call(method: String, path: String, body: JSONObject? = null): JSONObject =
-        withContext(Dispatchers.IO) { request(method, path, body) }
+    private suspend fun call(method: String, path: String, body: JSONObject? = null, readTimeoutMs: Int = 30_000): JSONObject =
+        withContext(Dispatchers.IO) { request(method, path, body, readTimeoutMs = readTimeoutMs) }
 
     private fun enc(text: String) = URLEncoder.encode(text, "UTF-8")
     private fun JSONObject.sessionOrNull(): SessionView? = if (isNull("session")) null else getJSONObject("session").toSession()
 
     // --- Sesión del dispositivo ---
 
-    /** Devuelve el token de este dispositivo. */
-    suspend fun login(server: String, password: String, device: String): String = withContext(Dispatchers.IO) {
-        val body = JSONObject().put("password", password).put("device", device)
-        request("POST", "/api/login", body, base = server, token = null).getString("token")
+    /** Entra con usuario y contraseña. Devuelve el token de este dispositivo y el nombre del usuario tal como está dado de alta. */
+    suspend fun login(server: String, user: String, password: String, device: String): Pair<String, String> = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("user", user.trim()).put("password", password).put("device", device)
+        val reply = request("POST", "/api/login", body, base = server, token = null)
+        reply.getString("token") to (reply.optJSONObject("user")?.optString("name") ?: user.trim())
+    }
+
+    /** Cambia la contraseña del usuario. Este dispositivo sigue dentro; sus otros dispositivos tienen que volver a entrar. */
+    suspend fun changePassword(current: String, next: String) {
+        call("POST", "/api/password", JSONObject().put("current", current).put("next", next))
     }
 
     suspend fun me(): JSONObject = call("GET", "/api/me")
@@ -194,7 +207,8 @@ class Api(private val prefs: Prefs) {
 
     /** Lee la playlist del enlace y dice qué trae para esa lista, sin añadir nada todavía. */
     suspend fun importPreview(listId: String, url: String): ImportPreview =
-        call("POST", "/api/import/preview", JSONObject().put("listId", listId).put("url", url)).let {
+        // Leer una lista larga de SoundCloud puede pasar del minuto: se espera más que en el resto de llamadas
+        call("POST", "/api/import/preview", JSONObject().put("listId", listId).put("url", url), readTimeoutMs = 110_000).let {
             ImportPreview(
                 importId = it.getString("importId"), platform = it.optString("platform"), title = it.optString("title"), thumb = it.str("thumb"),
                 count = it.getInt("count"), newCount = it.getInt("newCount"), already = it.getInt("already"), truncated = it.optBoolean("truncated"),
@@ -250,6 +264,13 @@ class Api(private val prefs: Prefs) {
     // --- Sesión de escucha ---
 
     suspend fun session(): SessionView? = call("GET", "/api/session").sessionOrNull()
+
+    /** «Continuar» en este dispositivo: pasa a ser él quien lleva la sesión del usuario. null si no hay ninguna. */
+    suspend fun claim(): SessionView? = try {
+        call("POST", "/api/session/claim").sessionOrNull()
+    } catch (e: ApiException) {
+        if (e.status == 404) null else throw e
+    }
 
     suspend fun startList(listId: String, startKey: String?, shuffle: Boolean): SessionView =
         call("POST", "/api/session", JSONObject().put("listId", listId).put("startKey", startKey ?: JSONObject.NULL).put("shuffle", shuffle))

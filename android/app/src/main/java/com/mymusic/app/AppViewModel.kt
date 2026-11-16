@@ -37,6 +37,7 @@ sealed interface Overlay {
     data object Player : Overlay
     data object Queue : Overlay
     data object History : Overlay
+    data object Settings : Overlay
     data class ListDetail(val id: String) : Overlay
 }
 
@@ -74,6 +75,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var loginError by mutableStateOf<String?>(null)
         private set
     val savedServer: String get() = prefs.serverUrl ?: DEFAULT_SERVER
+    var userName by mutableStateOf(prefs.userName.orEmpty())      // usuario con el que se ha entrado
+        private set
 
     // --- Buscar ---
     var query by mutableStateOf("")
@@ -121,6 +124,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var notice by mutableStateOf<String?>(null)    // aviso breve en pantalla
 
     private var lastKey: String? = null
+    private var ticks = 0
     private var sessionRefresh: Job? = null
 
     init {
@@ -128,7 +132,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             player.connect()
             // Al abrir: comprobar que el token sigue valiendo
             viewModelScope.launch {
-                runCatching { api.me() }.onFailure { if (it is ApiException && it.status == 401) logout(EXPIRED) }
+                runCatching { api.me() }
+                    .onSuccess { me ->
+                        // Quien ya estaba dentro antes de que hubiera usuarios no tiene guardado su nombre: lo dice el servidor
+                        val name = me.optJSONObject("user")?.optString("name").orEmpty()
+                        if (name.isNotEmpty() && name != userName) {
+                            prefs.userName = name
+                            userName = name
+                        }
+                    }
+                    .onFailure { if (it is ApiException && it.status == 401) logout(EXPIRED) }
             }
         }
         // Dos veces por segundo: barra de progreso, sesión caducada y cambio de canción
@@ -142,6 +155,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     lastKey = key
                     if (key != null) refreshSessionSoon(key)
                 }
+                // Mientras suena, cada 15 s se mira si la sesión la ha tomado otro dispositivo del mismo usuario
+                if (loggedIn && key != null && state.wantsToPlay && ++ticks % 30 == 0) refreshSessionSoon(key)
                 delay(500)
             }
         }
@@ -168,6 +183,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 delay(wait)
                 val view = runCatching { api.session() }.getOrNull() ?: continue
                 session = view
+                // Una sola sesión por usuario: si la ha tomado otro dispositivo suyo, este deja de sonar
+                if (!view.active && player.state.value.wantsToPlay) {
+                    player.pause()
+                    notice = "Se está escuchando en otro dispositivo."
+                    break
+                }
                 if (view.current?.track?.key == key) break
             }
             if (overlays.lastOrNull() == Overlay.Queue) loadQueue()
@@ -177,21 +198,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ------------------------------------------------------------------ login
 
-    fun login(serverInput: String, password: String) {
+    fun login(serverInput: String, user: String, password: String) {
         if (loginBusy) return
         val server = Api.normalizeServer(serverInput)
         loginBusy = true
         loginError = null
         viewModelScope.launch {
             try {
-                val token = api.login(server, password, "${Build.MANUFACTURER} ${Build.MODEL}")
+                val (token, name) = api.login(server, user, password, "${Build.MANUFACTURER} ${Build.MODEL}")
                 prefs.serverUrl = server
+                prefs.userName = name
                 prefs.token = token
+                userName = name
                 loggedIn = true
                 player.connect()
             } catch (e: ApiException) {
                 loginError = when (e.error) {
-                    "bad_password" -> "Contraseña incorrecta."
+                    "bad_password" -> "Usuario o contraseña incorrectos."
                     "too_many_attempts" -> "Demasiados intentos. Espera unos minutos."
                     "no_password_set" -> "El servidor todavía no tiene contraseña."
                     else -> "El servidor respondió con un error (${e.status})."
@@ -233,7 +256,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is Overlay.ListDetail -> loadList(overlay.id)
             Overlay.Queue -> loadQueue()
             Overlay.History -> run { history = api.history(100, distinct = false) }
-            Overlay.Player -> Unit
+            Overlay.Player, Overlay.Settings -> Unit
         }
     }
 
@@ -307,7 +330,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 results = found.results
                 searchHint = when (found.hint) {
                     "playlist" -> "Eso es el enlace de una lista. Para traerla, abre una lista tuya y pulsa Importar."
-                    "bad_link" -> "No reconozco ese enlace. Valen los de canciones de YouTube y Spotify."
+                    "bad_link" -> "No reconozco ese enlace. Valen los de canciones de YouTube, Spotify y SoundCloud."
                     else -> null
                 }
                 searched = true
@@ -343,7 +366,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             open(Overlay.Player)
             return
         }
-        run("No se pudo continuar.") { api.session()?.let(::start) }
+        // Este dispositivo pasa a llevar la sesión (si sonaba en otro, allí se para)
+        run("No se pudo continuar.") { api.claim()?.let(::start) }
+    }
+
+    // ------------------------------------------------------------------ cuenta
+
+    /** Cambia la contraseña del usuario. `done` recibe null si salió bien, o el mensaje de error. */
+    fun changePassword(current: String, next: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                api.changePassword(current, next)
+                notice = "Contraseña cambiada."
+                done(null)
+            } catch (e: ApiException) {
+                done(
+                    when (e.error) {
+                        "bad_password" -> "La contraseña actual no es esa."
+                        "weak_password" -> "La nueva necesita al menos 8 caracteres."
+                        "too_many_attempts" -> "Demasiados intentos. Espera unos minutos."
+                        else -> "No se pudo cambiar (${e.status})."
+                    }
+                )
+            } catch (e: Exception) {
+                done("Sin conexión con el servidor.")
+            }
+        }
     }
 
     private fun changed(view: SessionView) {
@@ -441,7 +489,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (e.status == 401) logout(EXPIRED)
                 ImportState.Failed(
                     when (e.error) {
-                        "bad_link" -> "Ese enlace no es de una lista de Spotify o YouTube."
+                        "bad_link" -> "Ese enlace no es de una lista de Spotify, YouTube o SoundCloud."
                         "not_a_playlist" -> "Es el enlace de una canción, no de una lista. Las canciones sueltas se pegan en Buscar."
                         "mix_not_supported" -> "Las mezclas automáticas de YouTube no se pueden importar."
                         "empty_playlist" -> "Esa lista está vacía."

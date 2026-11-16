@@ -108,6 +108,10 @@ class PlayerConnection(private val context: Context) {
         }
     }
 
+    fun pause() {
+        controller?.pause()
+    }
+
     fun seekTo(positionMs: Long) {
         controller?.seekTo(positionMs)
     }

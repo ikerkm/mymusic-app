@@ -23,7 +23,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -45,8 +44,9 @@ fun HomeScreen(vm: AppViewModel, state: PlayerState) {
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         item {
             ScreenTitle("Inicio") {
-                // Ajustes llega en la Fase 4
-                Icon(MmIcons.Settings, contentDescription = null, tint = Mm.Tx, modifier = Modifier.size(22.dp).alpha(0.35f))
+                Box(Modifier.size(40.dp).clickable { vm.open(Overlay.Settings) }.testTag("openSettings"), contentAlignment = Alignment.Center) {
+                    Icon(MmIcons.Settings, contentDescription = "Ajustes", tint = Mm.Tx, modifier = Modifier.size(22.dp))
+                }
             }
         }
 

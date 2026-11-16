@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyMusic — maqueta v1 del panel web</title>
+<style>
+:root{
+  --page:#15171c; --bg:#0d0e12; --side:#111318; --sur:#1a1c24; --sur2:#252834; --line:#2f3342;
+  --tx:#eef0f6; --mut:#9aa0b3; --acc:#9d8cff; --ok:#6fdc9a; --yt:#ff6b6b; --sp:#4ad98a; --sc:#ff9a4a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--tx);font:13px/1.4 "Segoe UI",Roboto,system-ui,sans-serif;padding:30px 24px 70px}
+header.top{max-width:1120px;margin:0 auto 26px}
+header.top h1{font-size:24px;font-weight:650;letter-spacing:-.3px}
+header.top p{color:var(--mut);margin-top:6px;max-width:80ch;font-size:14px}
+.shot{max-width:1120px;margin:0 auto 46px}
+.shot h2{font-size:15px;font-weight:650;margin-bottom:10px}
+.shot h2 span{color:var(--acc);margin-right:6px}
+.shot p.cap{color:var(--mut);font-size:13px;margin-top:10px;max-width:95ch}
+.ic{width:18px;height:18px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ic.f{fill:currentColor;stroke:none}
+.mut{color:var(--mut)}
+
+/* ventana del navegador */
+.win{border:1px solid #343949;border-radius:12px;overflow:hidden;background:var(--bg);position:relative}
+.bar{height:34px;background:#1d2029;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line)}
+.bar i{width:10px;height:10px;border-radius:50%;background:#3b4051}
+.bar .url{flex:1;max-width:420px;margin-left:10px;height:22px;border-radius:6px;background:#12141a;color:var(--mut);font-size:11.5px;display:flex;align-items:center;padding:0 10px}
+.app{display:grid;grid-template-columns:230px 1fr;grid-template-rows:1fr 76px;height:560px}
+
+/* barra lateral */
+.side{background:var(--side);border-right:1px solid var(--line);padding:16px 12px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.brand{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:700;margin:0 6px 14px}
+.brand b{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#ff6bd6,#5b2bff)}
+.nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-weight:600}
+.nav.on{background:var(--sur2);color:var(--tx)}
+.side h4{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--mut);margin:16px 10px 6px;display:flex;justify-content:space-between;align-items:center}
+.side h4 a{color:var(--acc);font-size:16px;line-height:1;text-decoration:none}
+.pl{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:8px;color:var(--tx)}
+.pl.on{background:var(--sur2)}
+.pl small{color:var(--mut);margin-left:auto}
+.who{margin-top:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--line);color:var(--mut)}
+.who b{width:26px;height:26px;border-radius:50%;background:var(--sur2);color:var(--tx);display:flex;align-items:center;justify-content:center;font-size:12px}
+
+/* zona principal */
+.main{padding:20px 26px;overflow:hidden}
+.main h3{font-size:24px;font-weight:700;letter-spacing:-.3px}
+.sec{font-size:10.5px;font-weight:650;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;margin:18px 0 8px}
+.cv{flex:none;border-radius:8px;background:linear-gradient(135deg,#7b6cff,#ff7ac3)}
+.c2{background:linear-gradient(135deg,#19c3a6,#2b6cff)}.c3{background:linear-gradient(135deg,#ffb347,#ff5d6c)}
+.c4{background:linear-gradient(135deg,#3a3f5c,#8e9bd6)}.c5{background:linear-gradient(135deg,#d7ff6b,#22b573)}
+.c6{background:linear-gradient(135deg,#ff6bd6,#5b2bff)}.c7{background:linear-gradient(135deg,#5ee0ff,#7b6cff)}
+.btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 14px;border-radius:99px;background:var(--sur2);font-weight:600;font-size:13px}
+.btn.pri{background:var(--acc);color:#14102e}
+.in{background:var(--sur);border:1px solid var(--line);border-radius:10px;padding:9px 12px;display:flex;align-items:center;gap:8px;color:var(--tx)}
+.in.focus{border-color:var(--acc)}
+.bd{font-size:9.5px;font-weight:650;padding:0 5px;border-radius:99px;border:1px solid;margin-left:6px}
+.yt{color:var(--yt)}.sp{color:var(--sp)}.sc{color:var(--sc)}
+table{width:100%;border-collapse:collapse;margin-top:8px}
+th{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);text-align:left;font-weight:650;padding:6px 8px;border-bottom:1px solid var(--line)}
+td{padding:7px 8px;border-bottom:1px solid #1d2029;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:330px}
+td.n{color:var(--mut);width:34px;text-align:right}
+tr.on td{color:var(--acc)}
+td .t{display:flex;align-items:center;gap:10px}
+td .t .cv{width:32px;height:32px;border-radius:6px}
+td.r{text-align:right;color:var(--mut)}
+.auto{color:var(--acc);font-weight:650;font-size:11.5px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.card{background:var(--sur);border-radius:12px;padding:12px}
+.card .cv{width:100%;height:92px;border-radius:10px;margin-bottom:10px}
+.card b{display:block}.card small{color:var(--mut)}
+
+/* barra del reproductor */
+.player{grid-column:1/3;background:#14161c;border-top:1px solid var(--line);display:grid;grid-template-columns:270px 1fr 270px;align-items:center;padding:0 18px;gap:16px}
+.now{display:flex;align-items:center;gap:12px;min-width:0}
+.now .cv{width:46px;height:46px}
+.now b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.now small{color:var(--mut)}
+.ctl{display:flex;flex-direction:column;align-items:center;gap:7px}
+.ctl .bts{display:flex;align-items:center;gap:20px;color:var(--mut)}
+.ctl .bts .big{width:34px;height:34px;border-radius:50%;background:var(--acc);color:#14102e;display:flex;align-items:center;justify-content:center}
+.prog{display:flex;align-items:center;gap:10px;width:100%;font-size:11px;color:var(--mut)}
+.prog .tr{flex:1;height:4px;border-radius:9px;background:var(--sur2);position:relative}
+.prog .tr i{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:9px;background:var(--acc)}
+.right{display:flex;align-items:center;justify-content:flex-end;gap:14px;color:var(--mut)}
+.vol{width:86px;height:4px;border-radius:9px;background:var(--sur2);position:relative}
+.vol i{position:absolute;left:0;top:0;bottom:0;width:70%;border-radius:9px;background:var(--mut)}
+
+/* piezas sueltas */
+.banner{display:flex;align-items:center;gap:12px;background:var(--sur);border:1px solid #9d8cff77;border-radius:12px;padding:10px 14px;margin-top:14px}
+.drawer{position:absolute;right:0;top:34px;bottom:76px;width:300px;background:var(--sur);border-left:1px solid var(--line);padding:16px}
+.drawer .row{display:flex;align-items:center;gap:10px;padding:6px 0}
+.drawer .row .cv{width:34px;height:34px;border-radius:6px}
+.drawer .row > div:not(.cv){min-width:0;flex:1}
+.drawer .row b,.drawer .row small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drawer .row small{color:var(--mut)}
+.dim{position:absolute;inset:34px 0 0 0;background:#000a}
+.modal{position:absolute;left:50%;top:86px;transform:translateX(-50%);width:440px;background:var(--sur);border:1px solid var(--line);border-radius:16px;padding:20px}
+.login{height:560px;display:flex;align-items:center;justify-content:center}
+.login .box{width:330px}
+.login label{display:block;font-size:11.5px;color:var(--mut);margin:14px 0 5px}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4.5" height="16" rx="1"/><rect x="13.5" y="4" width="4.5" height="16" rx="1"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 4l10 8-10 8z"/><rect x="17" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 4L9 12l10 8z"/><rect x="4.4" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 7h4l10 10h4M3 17h4l3-3M14 10l3-3h4M18 4l3 3-3 3M18 14l3 3-3 3"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12V9a3 3 0 0 1 3-3h11M20 12v3a3 3 0 0 1-3 3H6M15 3l3 3-3 3M9 15l-3 3 3 3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 6h13M4 11h13M4 16h7"/><path d="M15 14.5l5 3-5 3z"/></symbol>
+  <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></symbol>
+  <symbol id="i-drag" viewBox="0 0 24 24"><path d="M5 9h14M5 15h14"/></symbol>
+</svg>
+
+<header class="top">
+  <h1>MyMusic — maqueta v1 del panel web</h1>
+  <p>2026-11-16 · Borrador para aprobar. Es contrato de <b>estructura</b>: qué hay en cada pantalla y dónde. Misma dirección que usa la app (<code>mymusic.example.com</code>), abierta en el navegador del PC. Colores, textos y nombres de canciones son de ejemplo.</p>
+</header>
+
+<!-- 1 LOGIN -->
+<section class="shot">
+  <h2><span>1</span>Entrar</h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="login">
+      <div class="box">
+        <div class="brand" style="margin:0 0 6px"><b style="width:44px;height:44px;border-radius:14px"></b></div>
+        <div style="font-size:26px;font-weight:700;letter-spacing:-.4px">MyMusic</div>
+        <div class="mut">Tu música, desde tu servidor</div>
+        <label>Usuario</label><div class="in">iker</div>
+        <label>Contraseña</label><div class="in focus">••••••••••••</div>
+        <div class="btn pri" style="width:100%;justify-content:center;height:40px;margin-top:18px">Entrar</div>
+        <p class="mut" style="font-size:12px;margin-top:12px;text-align:center">El navegador recuerda la sesión en este equipo.</p>
+      </div>
+    </div>
+  </div>
+  <p class="cap">Usuario y contraseña, los mismos que en la app. Aquí no se pide la dirección del servidor: ya estás en ella.</p>
+</section>
+
+<!-- 2 INICIO -->
+<section class="shot">
+  <h2><span>2</span>Inicio</h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><b></b>MyMusic</div>
+        <div class="nav on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div>
+        <div class="nav"><svg class="ic"><use href="#i-search"/></svg>Buscar</div>
+        <h4>Tus listas <a>+</a></h4>
+        <div class="pl">breakcore<small>212</small></div>
+        <div class="pl">para currar<small>86</small></div>
+        <div class="pl">coche<small>140</small></div>
+        <div class="pl">city pop<small>54</small></div>
+        <div class="who"><b>I</b>iker · Ajustes</div>
+      </aside>
+      <main class="main">
+        <h3>Inicio</h3>
+        <div class="banner">
+          <div class="cv" style="width:44px;height:44px"></div>
+          <div style="flex:1"><b>Continuar: breakcore</b><div class="mut">Canción 14 de 212 · 1:32 · estaba sonando en tu Pocophone</div></div>
+          <div class="btn pri"><svg class="ic f" style="width:14px;height:14px"><use href="#i-play"/></svg>Continuar aquí</div>
+        </div>
+        <div class="sec">Tus listas</div>
+        <div class="cards">
+          <div class="card"><div class="cv"></div><b>breakcore</b><small>212 canciones</small></div>
+          <div class="card"><div class="cv c2"></div><b>para currar</b><small>86 canciones</small></div>
+          <div class="card"><div class="cv c3"></div><b>coche</b><small>140 canciones</small></div>
+          <div class="card"><div class="cv c5"></div><b>city pop</b><small>54 canciones</small></div>
+        </div>
+        <div class="sec">Escuchado hace poco</div>
+        <table>
+          <tr><td><div class="t"><div class="cv c7"></div>Paper Planets</div></td><td class="mut">Hollow Arcade</td><td class="r">3:48</td></tr>
+          <tr><td><div class="t"><div class="cv c6"></div>Night Bus to Nowhere</div></td><td class="mut">Lowlight Club</td><td class="r">5:02</td></tr>
+        </table>
+      </main>
+      <footer class="player">
+        <div class="now"><div class="cv c4"></div><div style="min-width:0"><b class="mut">Nada sonando</b><small>Elige una lista o busca una canción</small></div></div>
+        <div class="ctl"><div class="bts"><svg class="ic"><use href="#i-shuffle"/></svg><svg class="ic f"><use href="#i-prev"/></svg><div class="big"><svg class="ic f"><use href="#i-play"/></svg></div><svg class="ic f"><use href="#i-next"/></svg><svg class="ic"><use href="#i-repeat"/></svg></div><div class="prog"><span>0:00</span><div class="tr"></div><span>0:00</span></div></div>
+        <div class="right"><svg class="ic"><use href="#i-queue"/></svg><svg class="ic"><use href="#i-vol"/></svg><div class="vol"><i></i></div></div>
+      </footer>
+    </div>
+  </div>
+  <p class="cap">A la izquierda, siempre visibles: Inicio, Buscar y tus listas (con «+» para crear una). Abajo, la barra del reproductor. «Continuar aquí» trae al navegador lo que estabas escuchando; como hay una sola sesión por usuario, el móvil deja de sonar.</p>
+</section>
+
+<!-- 3 LISTA -->
+<section class="shot">
+  <h2><span>3</span>Dentro de una lista, con algo sonando</h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><b></b>MyMusic</div>
+        <div class="nav"><svg class="ic"><use href="#i-home"/></svg>Inicio</div>
+        <div class="nav"><svg class="ic"><use href="#i-search"/></svg>Buscar</div>
+        <h4>Tus listas <a>+</a></h4>
+        <div class="pl on">breakcore<small>212</small></div>
+        <div class="pl">para currar<small>86</small></div>
+        <div class="pl">coche<small>140</small></div>
+        <div class="pl">city pop<small>54</small></div>
+        <div class="who"><b>I</b>iker · Ajustes</div>
+      </aside>
+      <main class="main">
+        <div style="display:flex;gap:18px;align-items:flex-end">
+          <div class="cv" style="width:110px;height:110px;border-radius:14px"></div>
+          <div style="flex:1">
+            <div class="mut" style="font-size:11px;letter-spacing:.7px;text-transform:uppercase">Lista</div>
+            <h3 style="font-size:30px">breakcore</h3>
+            <div class="mut">212 canciones · 11 h 40 min</div>
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <div class="btn pri"><svg class="ic f" style="width:14px;height:14px"><use href="#i-play"/></svg>Reproducir</div>
+              <div class="btn"><svg class="ic" style="width:15px;height:15px"><use href="#i-shuffle"/></svg>Aleatorio</div>
+              <div class="btn"><svg class="ic" style="width:15px;height:15px"><use href="#i-import"/></svg>Importar</div>
+              <div class="btn" style="padding:0 10px"><svg class="ic"><use href="#i-more"/></svg></div>
+            </div>
+          </div>
+        </div>
+        <table>
+          <tr><th style="text-align:right">#</th><th>Título</th><th>Artista</th><th></th><th style="text-align:right">Duración</th><th></th></tr>
+          <tr><td class="n">12</td><td><div class="t"><div class="cv c2"></div>Static Lullaby</div></td><td class="mut">Nine Volt Choir</td><td><span class="bd yt">YouTube</span></td><td class="r">2:58</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+          <tr><td class="n">13</td><td><div class="t"><div class="cv c3"></div>Tunnel Vision 174</div></td><td class="mut">DJ Okapi</td><td><span class="bd sc">SoundCloud</span></td><td class="r">4:11</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+          <tr class="on"><td class="n">14</td><td><div class="t"><div class="cv c4"></div>Glass Engine</div></td><td>Halcyon Drift</td><td><span class="bd yt">YouTube</span></td><td class="r">4:05</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+          <tr><td class="n">15</td><td><div class="t"><div class="cv c7"></div>Soft Reset</div></td><td class="mut">Mira Vantablack</td><td><span class="bd sp">Spotify</span> <span class="auto">≈ automática</span></td><td class="r">6:40</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+          <tr><td class="n">16</td><td><div class="t"><div class="cv c5"></div>Pixel Rain</div></td><td class="mut">Sora Kite</td><td><span class="bd yt">YouTube</span></td><td class="r">3:15</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+        </table>
+      </main>
+      <footer class="player">
+        <div class="now"><div class="cv c4"></div><div style="min-width:0"><b>Glass Engine</b><small>Halcyon Drift · de breakcore · 14 de 212</small></div></div>
+        <div class="ctl"><div class="bts"><svg class="ic"><use href="#i-shuffle"/></svg><svg class="ic f"><use href="#i-prev"/></svg><div class="big"><svg class="ic f"><use href="#i-pause"/></svg></div><svg class="ic f"><use href="#i-next"/></svg><svg class="ic"><use href="#i-repeat"/></svg></div><div class="prog"><span>1:32</span><div class="tr"><i></i></div><span>4:05</span></div></div>
+        <div class="right"><svg class="ic"><use href="#i-queue"/></svg><svg class="ic"><use href="#i-vol"/></svg><div class="vol"><i></i></div></div>
+      </footer>
+    </div>
+  </div>
+  <p class="cap">La lista como tabla: doble clic en una fila la reproduce desde ahí; arrastrar una fila la reordena; los tres puntos de cada fila abren el mismo menú que en la app (reproducir, a continuación, a la cola, añadir a otra lista, cambiar coincidencia, quitar). Los tres puntos de arriba: renombrar o mandar la lista a la papelera. Las teclas multimedia del teclado y la barra espaciadora manejan el reproductor.</p>
+</section>
+
+<!-- 4 BUSCAR + COLA -->
+<section class="shot">
+  <h2><span>4</span>Buscar, con la cola abierta</h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><b></b>MyMusic</div>
+        <div class="nav"><svg class="ic"><use href="#i-home"/></svg>Inicio</div>
+        <div class="nav on"><svg class="ic"><use href="#i-search"/></svg>Buscar</div>
+        <h4>Tus listas <a>+</a></h4>
+        <div class="pl">breakcore<small>212</small></div>
+        <div class="pl">para currar<small>86</small></div>
+        <div class="pl">coche<small>140</small></div>
+        <div class="who"><b>I</b>iker · Ajustes</div>
+      </aside>
+      <main class="main" style="padding-right:326px">
+        <h3>Buscar</h3>
+        <div class="in focus" style="margin-top:12px"><svg class="ic"><use href="#i-search"/></svg>amen break 174</div>
+        <div class="mut" style="font-size:12px;margin-top:6px">Escribe, o pega el enlace de una canción de YouTube, Spotify o SoundCloud.</div>
+        <table>
+          <tr><th>Título</th><th>Artista</th><th style="text-align:right">Duración</th><th></th></tr>
+          <tr><td><div class="t"><div class="cv c3"></div>Tunnel Vision 174</div></td><td class="mut">DJ Okapi</td><td class="r">4:11</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+          <tr><td><div class="t"><div class="cv c6"></div>Amen, Sister (2 a.m. edit)</div></td><td class="mut">Kettle Drift</td><td class="r">3:27</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+          <tr><td><div class="t"><div class="cv c2"></div>Static Lullaby</div></td><td class="mut">Nine Volt Choir</td><td class="r">2:58</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+          <tr><td><div class="t"><div class="cv c7"></div>Soft Reset</div></td><td class="mut">Mira Vantablack</td><td class="r">6:40</td><td class="r"><svg class="ic"><use href="#i-more"/></svg></td></tr>
+        </table>
+      </main>
+      <footer class="player">
+        <div class="now"><div class="cv c4"></div><div style="min-width:0"><b>Glass Engine</b><small>Halcyon Drift · de breakcore · 14 de 212</small></div></div>
+        <div class="ctl"><div class="bts"><svg class="ic"><use href="#i-shuffle"/></svg><svg class="ic f"><use href="#i-prev"/></svg><div class="big"><svg class="ic f"><use href="#i-pause"/></svg></div><svg class="ic f"><use href="#i-next"/></svg><svg class="ic"><use href="#i-repeat"/></svg></div><div class="prog"><span>1:32</span><div class="tr"><i></i></div><span>4:05</span></div></div>
+        <div class="right"><svg class="ic" style="color:var(--acc)"><use href="#i-queue"/></svg><svg class="ic"><use href="#i-vol"/></svg><div class="vol"><i></i></div></div>
+      </footer>
+    </div>
+    <aside class="drawer">
+      <b style="font-size:15px">Cola</b>
+      <div class="sec" style="margin-top:12px">Sonando</div>
+      <div class="row"><div class="cv c4"></div><div><b style="color:var(--acc)">Glass Engine</b><small>Halcyon Drift</small></div></div>
+      <div class="sec">A continuación · breakcore</div>
+      <div class="row"><div class="cv c7"></div><div><b>Soft Reset</b><small>Mira Vantablack</small></div><svg class="ic mut"><use href="#i-drag"/></svg></div>
+      <div class="row"><div class="cv c5"></div><div><b>Pixel Rain</b><small>Sora Kite</small></div><svg class="ic mut"><use href="#i-drag"/></svg></div>
+      <div class="row"><div class="cv c6"></div><div><b>Night Bus to Nowhere</b><small>Lowlight Club</small></div><svg class="ic mut"><use href="#i-drag"/></svg></div>
+      <div class="row"><div class="cv c2"></div><div><b>Static Lullaby</b><small>Nine Volt Choir</small></div><svg class="ic mut"><use href="#i-drag"/></svg></div>
+    </aside>
+  </div>
+  <p class="cap">Doble clic en un resultado lo reproduce; los tres puntos, el menú de siempre. La cola se abre como panel lateral con el botón de la barra del reproductor: arrastrar para reordenar, y una «×» al pasar el ratón para quitar una canción.</p>
+</section>
+
+<!-- 5 IMPORTAR -->
+<section class="shot">
+  <h2><span>5</span>Importar a una lista</h2>
+  <div class="win" style="height:500px">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="dim"></div>
+    <div class="modal">
+      <b style="font-size:17px">Importar a «breakcore»</b>
+      <div class="mut" style="font-size:12px;margin:12px 0 5px">Enlace de una lista de Spotify, YouTube o SoundCloud</div>
+      <div class="in focus">https://open.spotify.com/playlist/4Kq…</div>
+      <div style="display:flex;align-items:center;gap:12px;background:var(--sur2);border-radius:12px;padding:12px;margin-top:12px">
+        <div class="cv c6" style="width:48px;height:48px"></div>
+        <div><b>Breakcore essentials</b><div class="mut">100 canciones <span class="bd sp">Spotify</span></div></div>
+      </div>
+      <div style="display:flex;gap:18px;margin-top:12px;align-items:baseline"><span><b style="font-size:18px;color:var(--ok)">88</b> nuevas</span><span class="mut"><b style="font-size:18px">12</b> ya están en tu lista</span></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px"><div class="btn">Cancelar</div><div class="btn pri">Añadir 88 canciones</div></div>
+      <p class="mut" style="font-size:12px;margin-top:12px">Las canciones de Spotify se buscan en YouTube la primera vez que suenan. De esta lista solo se pueden leer las 100 primeras canciones.</p>
+    </div>
+  </div>
+  <p class="cap">Igual que en la app: pegas el enlace (Ctrl+V), ves qué trae y cuántas ya tenías, y confirmas. Se abre con el botón «Importar» de la lista.</p>
+</section>
+
+</body>
+</html>

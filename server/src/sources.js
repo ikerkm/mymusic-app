@@ -18,8 +18,19 @@ export function parseKey(key) {
     if (platform === 'sp' && SPOTIFY_ID.test(id)) {
         return { key: `sp:${id}`, platform: 'spotify', url: null };
     }
+    // SoundCloud: la clave es el número de la canción. Su audio llega como AAC en un contenedor sin
+    // índice para saltar, así que se pasa a ADTS (aacToAdts) antes de servirlo.
+    if (platform === 'sc' && SOUNDCLOUD_ID.test(id)) {
+        return { key: `sc:${id}`, platform: 'soundcloud', url: `https://api.soundcloud.com/tracks/${id}`, aacToAdts: true };
+    }
     return null;
 }
+
+const SOUNDCLOUD_ID = /^\d{1,20}$/;
+const SOUNDCLOUD_NAME = /^[A-Za-z0-9_-]{1,100}$/;
+// Primer tramo de la dirección que no es un usuario, y segundo que no es una canción
+const SOUNDCLOUD_NOT_USER = new Set(['discover', 'search', 'stream', 'you', 'upload', 'charts', 'settings', 'messages', 'notifications', 'pages', 'popular', 'tags', 'people', 'feed', 'library', 'signin', 'logout', 'stations', 'pro', 'mobile', 'imprint', 'jobs', 'terms-of-use']);
+const SOUNDCLOUD_NOT_TRACK = new Set(['sets', 'tracks', 'albums', 'likes', 'followers', 'following', 'reposts', 'popular-tracks', 'toptracks', 'comments']);
 
 export const youtubeThumb = id => `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
 
@@ -58,6 +69,20 @@ export function parseLink(text) {
         if (!SPOTIFY_ID.test(id ?? '')) return null;
         if (type === 'track') return { kind: 'sp-track', id };
         if (type === 'playlist') return { kind: 'sp-playlist', id };
+    }
+
+    // SoundCloud: soundcloud.com/<usuario>/<canción> y soundcloud.com/<usuario>/sets/<lista>.
+    // Los enlaces privados (con un tramo «s-…» al final) no se admiten.
+    if (host === 'soundcloud.com') {
+        const [user, second, third, ...extra] = parts;
+        if (extra.length || !SOUNDCLOUD_NAME.test(user ?? '') || SOUNDCLOUD_NOT_USER.has(user.toLowerCase())) return null;
+        if (second === 'sets') return SOUNDCLOUD_NAME.test(third ?? '') ? { kind: 'sc-playlist', user, slug: third } : null;
+        if (third !== undefined || !SOUNDCLOUD_NAME.test(second ?? '') || SOUNDCLOUD_NOT_TRACK.has(second.toLowerCase())) return null;
+        return { kind: 'sc-track', user, slug: second };
+    }
+    // Enlace corto que da la app de SoundCloud al compartir: hay que seguirlo para saber qué es
+    if (url.hostname === 'on.soundcloud.com') {
+        return /^[A-Za-z0-9]{4,40}$/.test(parts[0] ?? '') && parts.length === 1 ? { kind: 'sc-short', id: parts[0] } : null;
     }
     return null;
 }

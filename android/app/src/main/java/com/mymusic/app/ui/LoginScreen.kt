@@ -56,8 +56,9 @@ fun fieldColors() = OutlinedTextFieldDefaults.colors(
 @Composable
 fun LoginScreen(vm: AppViewModel) {
     var server by rememberSaveable { mutableStateOf(vm.savedServer) }
+    var user by rememberSaveable { mutableStateOf(vm.userName) }
     var password by rememberSaveable { mutableStateOf("") }
-    val submit = { if (password.isNotEmpty()) vm.login(server, password) }
+    val submit = { if (password.isNotEmpty() && user.isNotBlank()) vm.login(server, user, password) }
 
     Column(
         modifier = Modifier
@@ -93,6 +94,19 @@ fun LoginScreen(vm: AppViewModel) {
         )
 
         Spacer(Modifier.height(14.dp))
+        Text("Usuario", color = Mm.Mut, fontSize = 12.sp)
+        Spacer(Modifier.height(5.dp))
+        OutlinedTextField(
+            value = user,
+            onValueChange = { user = it.take(30) },
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp),
+            colors = fieldColors(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            modifier = Modifier.fillMaxWidth().testTag("user"),
+        )
+
+        Spacer(Modifier.height(14.dp))
         Text("Contraseña", color = Mm.Mut, fontSize = 12.sp)
         Spacer(Modifier.height(5.dp))
         OutlinedTextField(
@@ -115,7 +129,7 @@ fun LoginScreen(vm: AppViewModel) {
         Spacer(Modifier.height(18.dp))
         Button(
             onClick = submit,
-            enabled = !vm.loginBusy && password.isNotEmpty(),
+            enabled = !vm.loginBusy && password.isNotEmpty() && user.isNotBlank(),
             modifier = Modifier.fillMaxWidth().height(46.dp),
         ) {
             if (vm.loginBusy) {

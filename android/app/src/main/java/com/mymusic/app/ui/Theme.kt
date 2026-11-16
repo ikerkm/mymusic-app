@@ -39,6 +39,7 @@ object Mm {
     val OnAcc = Color(0xFF14102E)
     val Yt = Color(0xFFFF6B6B)
     val Sp = Color(0xFF4AD98A)
+    val Sc = Color(0xFFFF9A4A)
     val Ok = Color(0xFF6FDC9A)
 }
 
@@ -139,6 +140,7 @@ fun PlatformBadge(platform: String, modifier: Modifier = Modifier) {
     val (label, color) = when (platform) {
         "youtube" -> "YouTube" to Mm.Yt
         "spotify" -> "Spotify" to Mm.Sp
+        "soundcloud" -> "SoundCloud" to Mm.Sc
         else -> platform to Mm.Mut
     }
     Text(

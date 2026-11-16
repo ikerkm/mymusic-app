@@ -108,10 +108,15 @@ export class AudioCache {
      * @param {number} o.trackMaxBytes  tope por canción; por encima falla con code 'too_big'
      * @param {(url: string) => {stdout, meta, done, kill}} o.open  fuente de audio (yt-dlp, o un doble en los tests)
      */
-    constructor({ maxBytes, trackMaxBytes, open, attempts = 2, log = () => {} }) {
+    constructor({ maxBytes, trackMaxBytes, open, attempts = 2, maxConcurrent = 3, log = () => {} }) {
         this.maxBytes = maxBytes;
         this.trackMaxBytes = trackMaxBytes;
         this.open = open;
+        // Cada extracción ocupa un núcleo unos segundos. Con varios usuarios, las que pasen de este
+        // número esperan su turno en vez de arrancar todas a la vez.
+        this.maxConcurrent = maxConcurrent;
+        this.running = 0;
+        this.waiting = [];
         // YouTube rechaza alguna extracción a ratos y la siguiente sale bien (visto en el bot y aquí):
         // si yt-dlp no da audio, se vuelve a intentar antes de dar la canción por fallida.
         this.attempts = attempts;
@@ -129,7 +134,7 @@ export class AudioCache {
     }
 
     // Devuelve el buffer de la canción; si no existe (o falló), lanza la extracción
-    get(key, url) {
+    get(key, url, options = {}) {
         const existing = this.items.get(key);
         if (existing && !existing.error) {
             existing.lastUsed = Date.now();
@@ -137,19 +142,38 @@ export class AudioCache {
         }
         const buffer = new TrackBuffer(key);
         this.items.set(key, buffer);
-        this.#fill(buffer, url);
+        this.#schedule(buffer, url, options);
         return buffer;
+    }
+
+    // Arranca la extracción si hay hueco; si no, la deja en cola. El hueco se libera cuando la
+    // canción termina, bien o mal, con sus reintentos incluidos.
+    #schedule(buffer, url, options) {
+        const start = () => {
+            this.running++;
+            const release = () => {
+                if (!buffer.done) return;
+                buffer.ev.off('tick', release);
+                this.running--;
+                this.waiting.shift()?.();
+            };
+            buffer.ev.on('tick', release);
+            this.#fill(buffer, url, options);
+            release();          // por si ha fallado en el acto
+        };
+        if (this.running < this.maxConcurrent) start();
+        else this.waiting.push(start);
     }
 
     #drop(buffer) {
         if (this.items.get(buffer.key) === buffer) this.items.delete(buffer.key);
     }
 
-    #fill(buffer, url, attempt = 1) {
+    #fill(buffer, url, options = {}, attempt = 1) {
         const started = Date.now();
         let source;
         try {
-            source = this.open(url);
+            source = this.open(url, options);
         } catch (error) {
             buffer.fail(error);
             this.#drop(buffer);
@@ -185,7 +209,7 @@ export class AudioCache {
                 if (attempt < this.attempts) {
                     // Quien esté esperando esta canción sigue esperando: no se entera del primer fallo
                     this.log(`[audio] ${buffer.key}: intento ${attempt} fallido ${after}: ${reason} — se reintenta`);
-                    return this.#fill(buffer, url, attempt + 1);
+                    return this.#fill(buffer, url, options, attempt + 1);
                 }
                 const error = new Error(stderr || 'yt-dlp no produjo audio');
                 error.code = 'extract_failed';

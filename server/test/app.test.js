@@ -78,11 +78,11 @@ test('cerrar sesión invalida el token y la lista anterior queda en removed/', a
 test('cambiar la contraseña invalida las sesiones y conserva lo anterior en removed/', async () => {
     const s = await start();
     try {
-        s.auth.setPassword('otra-clave-distinta');
+        s.auth.setPassword(s.owner.id, 'otra-clave-distinta');
         assert.equal((await s.api('/api/me', { token: s.token })).status, 401);
         assert.equal((await s.login(PASSWORD)).status, 401);
         assert.equal((await s.login('otra-clave-distinta')).status, 200);
-        assert.ok(readdirSync(join(s.dir, 'removed')).some(f => f.startsWith('auth.json.')));
+        assert.ok(readdirSync(join(s.dir, 'removed')).some(f => f.startsWith('users.json.')));
     } finally { await s.close(); }
 });
 

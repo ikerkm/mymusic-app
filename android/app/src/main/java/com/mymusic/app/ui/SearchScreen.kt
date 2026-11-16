@@ -139,7 +139,7 @@ fun SearchScreen(vm: AppViewModel, playingKey: String?, modifier: Modifier = Mod
             }
             vm.searchError != null -> Text(vm.searchError.orEmpty(), color = Mm.Yt, fontSize = 13.sp, modifier = Modifier.padding(top = 16.dp))
             !vm.searched -> Text(
-                "Escribe, o pega el enlace de una canción de YouTube o Spotify.",
+                "Escribe, o pega el enlace de una canción de YouTube, Spotify o SoundCloud.",
                 color = Mm.Mut,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 8.dp),

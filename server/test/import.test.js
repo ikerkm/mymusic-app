@@ -237,3 +237,44 @@ test('buscador: un enlace de canción da esa canción; uno de lista avisa de que
         assert.equal((await search('amen break')).results[0].title, 'resultado de amen break', 'el texto normal sigue buscando');
     } finally { await s.close(); }
 });
+
+// ------------------------------------------------------------------ SoundCloud
+
+test('SoundCloud: enlaces, claves, importar una lista y audio pedido para reenvolver', async () => {
+    assert.deepEqual(parseLink('https://soundcloud.com/forss/flickermood?si=x&utm_source=clipboard'), { kind: 'sc-track', user: 'forss', slug: 'flickermood' });
+    assert.deepEqual(parseLink('https://m.soundcloud.com/forss/sets/soulhack'), { kind: 'sc-playlist', user: 'forss', slug: 'soulhack' });
+    assert.deepEqual(parseLink('https://on.soundcloud.com/AbCd1234'), { kind: 'sc-short', id: 'AbCd1234' });
+    for (const bad of ['https://soundcloud.com/discover', 'https://soundcloud.com/forss', 'https://soundcloud.com/forss/sets', 'https://soundcloud.com/forss/likes', 'https://soundcloud.com/forss/flickermood/s-AbCdEf', 'https://on.soundcloud.com/a/b']) {
+        assert.equal(parseLink(bad), null, bad);
+    }
+    assert.deepEqual(parseKey('sc:293'), { key: 'sc:293', platform: 'soundcloud', url: 'https://api.soundcloud.com/tracks/293', aacToAdts: true });
+    assert.equal(parseKey('sc:abc'), null);
+
+    const sc = n => ({ key: `sc:${n}`, platform: 'soundcloud', title: `Pista ${n}`, artist: 'Forss', durationSec: 214, thumb: 'https://i1.sndcdn.com/x.jpg' });
+    const s = await startServer({
+        importers: {
+            ...importers,
+            soundcloudTrack: async () => sc(293),
+            soundcloudSet: async () => ({ platform: 'soundcloud', title: 'Soulhack', thumb: null, truncated: false, tracks: [sc(290), sc(291)] }),
+            soundcloudShort: async code => ({ Lista123: { kind: 'sc-playlist', user: 'forss', slug: 'soulhack' }, Cancion1: { kind: 'sc-track', user: 'forss', slug: 'flickermood' } }[code] ?? null),
+        },
+    });
+    try {
+        const search = async q => (await s.call('GET', `/api/search?q=${encodeURIComponent(q)}`)).body;
+        assert.deepEqual((await search('https://soundcloud.com/forss/flickermood')).results.map(t => [t.key, t.platform]), [['sc:293', 'soundcloud']]);
+        assert.deepEqual((await search('https://on.soundcloud.com/Cancion1')).results.map(t => t.key), ['sc:293'], 'el enlace corto se sigue');
+        assert.deepEqual(await search('https://on.soundcloud.com/Lista123'), { results: [], hint: 'playlist' });
+        assert.deepEqual(await search('https://on.soundcloud.com/NoExiste9'), { results: [], hint: 'bad_link' });
+
+        const list = await newList(s);
+        const preview = (await s.call('POST', '/api/import/preview', { listId: list.id, url: 'https://on.soundcloud.com/Lista123' })).body;
+        assert.deepEqual([preview.platform, preview.title, preview.count, preview.newCount], ['soundcloud', 'Soulhack', 2, 2]);
+        assert.equal((await s.call('POST', `/api/lists/${list.id}/import`, { importId: preview.importId })).body.added, 2);
+        assert.equal((await s.call('POST', '/api/import/preview', { listId: list.id, url: 'https://soundcloud.com/forss/flickermood' })).body.error, 'not_a_playlist');
+
+        await (await s.api('/api/stream/sc:290', { token: s.token })).arrayBuffer();
+        assert.deepEqual([s.open.calls.at(-1), s.open.options.at(-1)], ['https://api.soundcloud.com/tracks/290', { aacToAdts: true }]);
+        await (await s.api('/api/stream/yt:dQw4w9WgXcQ', { token: s.token })).arrayBuffer();
+        assert.deepEqual(s.open.options.at(-1), { aacToAdts: undefined }, 'lo de YouTube se sirve tal cual');
+    } finally { await s.close(); }
+});

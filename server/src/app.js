@@ -34,7 +34,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, lists, sessions, history, appDist, matches, importers, pending, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -51,6 +51,9 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
         const entry = await matches?.resolve(source.key);
         return entry?.yt ? parseKey(entry.yt.key) : null;
     }
+    // Los enlaces cortos de SoundCloud (on.soundcloud.com/…) hay que seguirlos para saber si son canción o lista
+    const followShort = async link => (link?.kind === 'sc-short' ? importers.soundcloudShort(link.id) : link);
+
     // Lo mismo, pero sin buscar: solo si ya se conoce
     const audioKeyOf = key => {
         const source = parseKey(key);
@@ -60,18 +63,22 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
 
     app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+    // Entrar con usuario y contraseña. Sin usuario se entiende el dueño: es lo que mandan las
+    // versiones de la app anteriores a las cuentas. El error es el mismo falle el nombre o la
+    // contraseña, para no revelar qué usuarios existen.
     app.post('/api/login', (req, res) => {
         const ip = clientIp(req);
         if (auth.blocked(ip)) return res.status(429).json({ error: 'too_many_attempts' });
-        if (!auth.hasPassword()) return res.status(503).json({ error: 'no_password_set' });
-        if (!auth.checkPassword(req.body?.password)) {
+        if (!auth.hasUsers()) return res.status(503).json({ error: 'no_password_set' });
+        const user = auth.checkLogin(req.body?.user, req.body?.password);
+        if (!user) {
             auth.noteFail(ip);
             log(`[login] intento fallido desde ${ip}`);
             return res.status(401).json({ error: 'bad_password' });
         }
-        const token = auth.issueToken(req.body?.device);
-        log(`[login] sesión nueva: ${String(req.body?.device ?? 'dispositivo').slice(0, 60)}`);
-        res.json({ token });
+        const token = auth.issueToken(user.id, req.body?.device);
+        log(`[login] sesión nueva de ${user.name}: ${String(req.body?.device ?? 'dispositivo').slice(0, 60)}`);
+        res.json({ token, user: { name: user.name, admin: user.admin } });
     });
 
     app.post('/api/logout', requireAuth, (req, res) => {
@@ -80,7 +87,22 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
     });
 
     app.get('/api/me', requireAuth, (req, res) => {
-        res.json({ ok: true, version, device: req.device.device, since: req.device.createdAt });
+        res.json({ ok: true, version, user: { name: req.user.name, admin: req.user.admin }, device: req.device.device, since: req.device.createdAt });
+    });
+
+    // Cambiar la propia contraseña. Este dispositivo sigue dentro; los demás del mismo usuario tienen que volver a entrar.
+    app.post('/api/password', requireAuth, (req, res) => {
+        const ip = clientIp(req);
+        if (auth.blocked(ip)) return res.status(429).json({ error: 'too_many_attempts' });
+        if (!auth.checkLogin(req.user.name, req.body?.current)) {
+            auth.noteFail(ip);
+            return res.status(401).json({ error: 'bad_password' });
+        }
+        const next = req.body?.next;
+        if (typeof next !== 'string' || next.length < 8) return res.status(400).json({ error: 'weak_password' });
+        auth.setPassword(req.user.id, next, { keepToken: req.token });
+        log(`[login] ${req.user.name} ha cambiado su contraseña`);
+        res.json({ ok: true });
     });
 
     app.get('/api/search', requireAuth, async (req, res) => {
@@ -89,7 +111,11 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
         try {
             // Un enlace pegado en el buscador: una canción suelta se devuelve como resultado único;
             // una lista no se abre aquí (se importa desde dentro de una lista propia).
-            const link = importers ? parseLink(query) : null;
+            const link = importers ? await followShort(parseLink(query)) : null;
+            if (link?.kind === 'sc-track') {
+                const track = cleanTrack(await importers.soundcloudTrack(link));
+                return res.json({ results: track ? [track] : [] });
+            }
             if (link?.kind === 'yt-video') {
                 const track = await importers.youtubeVideo(link.id);
                 return res.json({ results: track ? [track] : [] });
@@ -109,21 +135,21 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
     });
 
     // Pista que no cabe en memoria: tubería directa, sin poder saltar
-    function pipeDirect(req, res, url) {
-        const source = open(url);
-        res.on('close', () => source.kill());
+    function pipeDirect(req, res, source) {
+        const stream = open(source.url, { aacToAdts: source.aacToAdts });
+        res.on('close', () => stream.kill());
         let started = false;
-        source.stdout.on('data', chunk => {
+        stream.stdout.on('data', chunk => {
             if (!started) {
                 started = true;
                 res.status(200).set({ 'Content-Type': sniffMime(chunk), 'Accept-Ranges': 'none', 'Cache-Control': 'private, no-store' });
             }
             if (!res.write(chunk)) {
-                source.stdout.pause();
-                res.once('drain', () => source.stdout.resume());
+                stream.stdout.pause();
+                res.once('drain', () => stream.stdout.resume());
             }
         });
-        source.done.then(({ stderr }) => {
+        stream.done.then(({ stderr }) => {
             if (started) return res.end();
             res.status(502).json({ error: 'extract_failed', message: explain(stderr) });
         });
@@ -145,11 +171,11 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
 
         let buffer;
         try {
-            buffer = cache.get(source.key, source.url);
+            buffer = cache.get(source.key, source.url, { aacToAdts: source.aacToAdts });
             await buffer.waitHeader(abort.signal);
         } catch (error) {
             if (abort.signal.aborted) return;
-            if (error.code === 'too_big') return pipeDirect(req, res, source.url);
+            if (error.code === 'too_big') return pipeDirect(req, res, source);
             log(`[stream] ${source.key}: ${error.message.slice(0, 300)}`);
             return res.status(502).json({ error: 'extract_failed', message: explain(error.message) });
         }
@@ -185,14 +211,24 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
     });
 
     // La canción que suena y la siguiente quedan fijadas en memoria, por la clave de su audio
+    // (de todos los usuarios que tienen una sesión abierta)
     function syncPins() {
-        const view = sessions?.view();
-        cache.pinned = new Set([view?.window.current?.track.key, view?.window.next?.track.key].map(key => key && audioKeyOf(key)).filter(Boolean));
+        const keys = [];
+        for (const { sessions } of stores.loaded()) {
+            const view = sessions.view();
+            keys.push(view?.window.current?.track.key, view?.window.next?.track.key);
+        }
+        cache.pinned = new Set(keys.map(key => key && audioKeyOf(key)).filter(Boolean));
     }
 
     // ------------------------------------------------------------------ Fase 2: listas, sesión, historial
     const priv = express.Router();
     priv.use(requireAuth);
+    // Cada petición trabaja con las listas, la sesión y el historial de su usuario
+    priv.use((req, res, next) => {
+        req.ctx = stores.for(req.user.id);
+        next();
+    });
     const int = value => (/^\d+$/.test(String(value ?? '')) ? Number(value) : undefined);
     // Canción que manda la app, ya limpia. Si viene de Spotify se apunta para poder buscar su coincidencia.
     const trackFrom = input => {
@@ -203,15 +239,15 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
 
     // --- Listas ---
     const listOr404 = (req, res) => {
-        const list = lists.get(req.params.id);
+        const list = req.ctx.lists.get(req.params.id);
         if (!list) res.status(404).json({ error: 'list_not_found' });
         return list;
     };
 
-    priv.get('/lists', (req, res) => res.json({ lists: lists.all() }));
+    priv.get('/lists', (req, res) => res.json({ lists: req.ctx.lists.all() }));
 
     priv.post('/lists', (req, res) => {
-        const list = lists.create(req.body?.name);
+        const list = req.ctx.lists.create(req.body?.name);
         if (!list) return res.status(400).json({ error: 'bad_name' });
         res.status(201).json({ list: ListStore.summary(list) });
     });
@@ -223,7 +259,7 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
 
     const renameList = (req, res) => {
         if (!listOr404(req, res)) return;
-        const list = lists.rename(req.params.id, req.body?.name);
+        const list = req.ctx.lists.rename(req.params.id, req.body?.name);
         if (!list) return res.status(400).json({ error: 'bad_name' });
         res.json({ list: ListStore.summary(list) });
     };
@@ -232,7 +268,7 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
 
     priv.delete('/lists/:id', (req, res) => {
         if (!listOr404(req, res)) return;
-        lists.remove(req.params.id);
+        req.ctx.lists.remove(req.params.id);
         res.json({ ok: true });
     });
 
@@ -240,20 +276,20 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
         if (!listOr404(req, res)) return;
         const track = trackFrom(req.body?.track);
         if (!track) return res.status(400).json({ error: 'bad_track' });
-        const { added, list } = lists.addTracks(req.params.id, [track]);
+        const { added, list } = req.ctx.lists.addTracks(req.params.id, [track]);
         res.json({ added, list: ListStore.summary(list) });
     });
 
     priv.delete('/lists/:id/tracks/:key', (req, res) => {
         if (!listOr404(req, res)) return;
-        const list = lists.removeTrack(req.params.id, req.params.key);
+        const list = req.ctx.lists.removeTrack(req.params.id, req.params.key);
         if (!list) return res.status(404).json({ error: 'track_not_found' });
         res.json({ list: ListStore.summary(list) });
     });
 
     priv.post('/lists/:id/move', (req, res) => {
         if (!listOr404(req, res)) return;
-        const list = lists.moveTrack(req.params.id, req.body?.key, req.body?.toIndex);
+        const list = req.ctx.lists.moveTrack(req.params.id, req.body?.key, req.body?.toIndex);
         if (!list) return res.status(400).json({ error: 'bad_move' });
         res.json({ list: ListStore.summary(list) });
     });
@@ -261,75 +297,98 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
     // --- Sesión de escucha ---
     // Tras cada cambio: la canción actual y la siguiente quedan fijadas en memoria, y la siguiente se
     // prepara si el usuario se queda unos segundos en la actual.
-    let prefetchTimer = null;
-    function syncAudio({ prefetch = true } = {}) {
+    const prefetchTimers = new Map();        // un temporizador por usuario
+    function syncAudio(userId) {
         syncPins();
+        const { sessions } = stores.for(userId);
         const nextKey = sessions.view()?.window.next?.track.key ?? null;
-        clearTimeout(prefetchTimer);
-        if (!prefetch || !nextKey) return;
-        prefetchTimer = setTimeout(async () => {
+        clearTimeout(prefetchTimers.get(userId));
+        if (!nextKey) return;
+        const timer = setTimeout(async () => {
             if (sessions.view()?.window.next?.track.key !== nextKey) return;
             const source = await resolveAudio(nextKey).catch(() => null);
             if (!source || sessions.view()?.window.next?.track.key !== nextKey) return;
             syncPins();
             const known = cache.items.has(source.key);
-            cache.get(source.key, source.url);
+            cache.get(source.key, source.url, { aacToAdts: source.aacToAdts });
             if (!known) log(`[sesion] preparando la siguiente: ${nextKey === source.key ? source.key : `${nextKey} → ${source.key}`}`);
         }, prefetchDelayMs);
-        prefetchTimer.unref();
+        timer.unref();
+        prefetchTimers.set(userId, timer);
     }
-    syncAudio({ prefetch: false });      // al arrancar: fijar lo que hubiera, sin extraer nada
 
+    // Una sesión por usuario, compartida entre sus dispositivos (D35), pero solo uno la lleva a la
+    // vez: el último que empezó a reproducir o pidió continuar. `active` le dice a cada dispositivo
+    // si es él; a los demás, avanzar o informar de su posición se les rechaza (409).
     const entryShown = entry => (entry ? { index: entry.index, track: show(entry.track) } : null);
-    const viewShown = view => (view ? {
+    const viewShown = (req, view) => (view ? {
         ...view,
+        device: undefined,
+        active: !view.device || view.device === req.device.id,
         window: { prev: entryShown(view.window.prev), current: entryShown(view.window.current), next: entryShown(view.window.next) },
     } : null);
-
-    const reply = (res, view, error = 'no_session') => {
-        if (!view) return res.status(sessions.active ? 400 : 404).json({ error: sessions.active ? error : 'no_session' });
-        syncAudio();
-        res.json({ session: viewShown(view) });
+    const otherDevice = req => {
+        const holder = req.ctx.sessions.view()?.device;
+        if (!holder || holder === req.device.id) return false;
+        // Si el dispositivo que la llevaba ya no existe (cerró sesión, cambió la contraseña), la sesión
+        // queda libre y se la queda quien pregunta. Así no se bloquea una app que no sabe pedirla.
+        if (auth.hasDevice(req.user.id, holder)) return true;
+        req.ctx.sessions.claim(req.device.id);
+        return false;
     };
 
-    priv.get('/session', (req, res) => res.json({ session: viewShown(sessions.view()) }));
+    const reply = (req, res, view, error = 'no_session') => {
+        if (!view) return res.status(req.ctx.sessions.active ? 400 : 404).json({ error: req.ctx.sessions.active ? error : 'no_session' });
+        syncAudio(req.user.id);
+        res.json({ session: viewShown(req, view) });
+    };
+
+    priv.get('/session', (req, res) => res.json({ session: viewShown(req, req.ctx.sessions.view()) }));
 
     priv.post('/session', (req, res) => {
         const body = req.body ?? {};
         if (body.listId !== undefined) {
-            const list = lists.get(body.listId);
+            const list = req.ctx.lists.get(body.listId);
             if (!list) return res.status(404).json({ error: 'list_not_found' });
             if (list.tracks.length === 0) return res.status(400).json({ error: 'empty_list' });
-            return reply(res, sessions.start({
+            return reply(req, res, req.ctx.sessions.start({
                 source: { type: 'list', id: list.id, name: list.name },
                 tracks: list.tracks,
                 startKey: typeof body.startKey === 'string' ? body.startKey : null,
                 shuffle: body.shuffle === true,
+                device: req.device.id,
             }));
         }
         const track = trackFrom(body.track);
         if (!track) return res.status(400).json({ error: 'bad_track' });
-        reply(res, sessions.start({ source: { type: 'search', name: 'Búsqueda' }, tracks: [track] }));
+        reply(req, res, req.ctx.sessions.start({ source: { type: 'search', name: 'Búsqueda' }, tracks: [track], device: req.device.id }));
     });
+
+    // «Continuar» en este dispositivo: pasa a ser él quien lleva la sesión
+    priv.post('/session/claim', (req, res) => reply(req, res, req.ctx.sessions.claim(req.device.id)));
 
     // La canción se puede señalar por posición o por clave. La app usa la clave: las posiciones
     // se mueven cuando se toca la cola, las claves no.
-    const indexFrom = body => (Number.isInteger(body?.index) ? body.index : sessions.indexOf(body?.key));
+    const indexFrom = req => (Number.isInteger(req.body?.index) ? req.body.index : req.ctx.sessions.indexOf(req.body?.key));
 
-    priv.post('/session/goto', (req, res) => reply(res, sessions.goto(indexFrom(req.body)), 'bad_index'));
+    priv.post('/session/goto', (req, res) => {
+        if (otherDevice(req)) return res.status(409).json({ error: 'other_device' });
+        reply(req, res, req.ctx.sessions.goto(indexFrom(req)), 'bad_index');
+    });
 
-    const setOptions = (req, res) => reply(res, sessions.setOptions(req.body ?? {}));
+    const setOptions = (req, res) => reply(req, res, req.ctx.sessions.setOptions(req.body ?? {}));
     priv.patch('/session', setOptions);
     priv.put('/session', setOptions);        // alias: el cliente HTTP de Android no admite PATCH en todas las versiones
 
     priv.put('/session/state', (req, res) => {
-        const result = sessions.report({ index: indexFrom(req.body), positionMs: Number(req.body?.positionMs) });
-        if (result?.played) history.append(result.played);
+        if (otherDevice(req)) return res.status(409).json({ error: 'other_device' });
+        const result = req.ctx.sessions.report({ index: indexFrom(req), positionMs: Number(req.body?.positionMs) });
+        if (result?.played) req.ctx.history.append(result.played);
         res.json({ ok: Boolean(result) });
     });
 
     priv.get('/session/queue', (req, res) => {
-        const queue = sessions.queue(int(req.query.from), int(req.query.limit));
+        const queue = req.ctx.sessions.queue(int(req.query.from), int(req.query.limit));
         if (!queue) return res.status(404).json({ error: 'no_session' });
         res.json({ ...queue, entries: queue.entries.map(entryShown) });
     });
@@ -338,31 +397,31 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
         const track = trackFrom(req.body?.track);
         if (!track) return res.status(400).json({ error: 'bad_track' });
         // Sin sesión abierta, «a continuación» o «añadir a la cola» equivale a reproducir
-        if (!sessions.active) return reply(res, sessions.start({ source: { type: 'search', name: 'Búsqueda' }, tracks: [track] }));
-        reply(res, sessions.enqueue(track, req.body?.mode === 'next' ? 'next' : 'end'));
+        if (!req.ctx.sessions.active) return reply(req, res, req.ctx.sessions.start({ source: { type: 'search', name: 'Búsqueda' }, tracks: [track], device: req.device.id }));
+        reply(req, res, req.ctx.sessions.enqueue(track, req.body?.mode === 'next' ? 'next' : 'end'));
     });
 
     // Mover y quitar también se piden por clave. Por clave, una orden repetida no hace daño:
     // por posición, una segunda orden idéntica quitaría la canción que ha ocupado ese hueco.
     priv.post('/session/queue/move', (req, res) => {
-        const from = Number.isInteger(req.body?.from) ? req.body.from : sessions.indexOf(req.body?.key);
-        reply(res, sessions.moveQueued(from, req.body?.to), 'bad_move');
+        const from = Number.isInteger(req.body?.from) ? req.body.from : req.ctx.sessions.indexOf(req.body?.key);
+        reply(req, res, req.ctx.sessions.moveQueued(from, req.body?.to), 'bad_move');
     });
 
     priv.delete('/session/queue/:ref', (req, res) => {
         const byIndex = int(req.params.ref);
-        if (byIndex !== undefined) return reply(res, sessions.removeQueued(byIndex), 'bad_index');
-        const index = sessions.indexOf(req.params.ref);
+        if (byIndex !== undefined) return reply(req, res, req.ctx.sessions.removeQueued(byIndex), 'bad_index');
+        const index = req.ctx.sessions.indexOf(req.params.ref);
         // Si la canción ya no está en la cola (orden repetida), no pasa nada: se devuelve la sesión tal cual
-        if (index === null) return reply(res, sessions.view());
+        if (index === null) return reply(req, res, req.ctx.sessions.view());
         log(`[sesion] quitar de la cola: ${req.params.ref}`);
-        reply(res, sessions.removeQueued(index), 'bad_index');
+        reply(req, res, req.ctx.sessions.removeQueued(index), 'bad_index');
     });
 
     // --- Historial ---
     priv.get('/history', (req, res) => {
         const limit = Math.min(int(req.query.limit) ?? 30, 200);
-        let entries = history.recent(req.query.distinct ? limit * 4 : limit);
+        let entries = req.ctx.history.recent(req.query.distinct ? limit * 4 : limit);
         if (req.query.distinct) {
             const seen = new Set();
             entries = entries.filter(e => !seen.has(e.track.key) && seen.add(e.track.key)).slice(0, limit);
@@ -373,17 +432,22 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
     // --- Fase 3: importar una playlist de fuera a una lista propia ---
     // Dos pasos, como en la maqueta: primero se lee la lista y se enseña qué trae; al confirmar se añade.
     priv.post('/import/preview', async (req, res) => {
-        const list = lists.get(req.body?.listId);
+        const list = req.ctx.lists.get(req.body?.listId);
         if (!list) return res.status(404).json({ error: 'list_not_found' });
-        const link = parseLink(req.body?.url);
+        const link = await followShort(parseLink(req.body?.url)).catch(() => null);
         if (!link) return res.status(400).json({ error: 'bad_link' });
         if (link.kind === 'yt-mix') return res.status(400).json({ error: 'mix_not_supported' });
-        if (link.kind !== 'yt-playlist' && link.kind !== 'sp-playlist') return res.status(400).json({ error: 'not_a_playlist' });
+        const readers = {
+            'yt-playlist': () => importers.youtubePlaylist(link.id),
+            'sp-playlist': () => importers.spotifyPlaylist(link.id),
+            'sc-playlist': () => importers.soundcloudSet(link),
+        };
+        if (!readers[link.kind]) return res.status(400).json({ error: 'not_a_playlist' });
         let found;
         try {
-            found = link.kind === 'yt-playlist' ? await importers.youtubePlaylist(link.id) : await importers.spotifyPlaylist(link.id);
+            found = await readers[link.kind]();
         } catch (error) {
-            log(`[importar] ${link.kind} ${link.id}: ${String(error.message).slice(0, 200)}`);
+            log(`[importar] ${link.kind} ${link.id ?? `${link.user}/${link.slug}`}: ${String(error.message).slice(0, 200)}`);
             return res.status(502).json({ error: 'import_failed' });
         }
         const seen = new Set();
@@ -393,7 +457,7 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
         const fresh = tracks.filter(track => !present.has(track.key)).length;
         log(`[importar] «${found.title}» (${found.platform}): ${tracks.length} canciones, ${fresh} nuevas para «${list.name}»`);
         res.json({
-            importId: pending.put({ listId: list.id, tracks }),
+            importId: pending.put({ userId: req.user.id, listId: list.id, tracks }),
             platform: found.platform,
             title: found.title,
             thumb: found.thumb,
@@ -408,9 +472,9 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
         const list = listOr404(req, res);
         if (!list) return;
         const ready = pending.get(req.body?.importId);
-        if (!ready || ready.listId !== list.id) return res.status(410).json({ error: 'import_expired' });
+        if (!ready || ready.listId !== list.id || ready.userId !== req.user.id) return res.status(410).json({ error: 'import_expired' });
         matches.remember(ready.tracks);
-        const { added, list: updated } = lists.addTracks(list.id, ready.tracks);
+        const { added, list: updated } = req.ctx.lists.addTracks(list.id, ready.tracks);
         res.json({ added, list: ListStore.summary(updated) });
     });
 

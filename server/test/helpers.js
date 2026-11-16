@@ -24,7 +24,9 @@ export function fakeAudio(length) {
  */
 export function fakeOpen(bytes, { chunk = 1000, delayMs = 1, filesize = bytes.length, cutAt = null, stderr = '', failFirst = 0 } = {}) {
     const calls = [];
-    const open = url => {
+    const options = [];
+    const open = (url, opts) => {
+        options.push(opts);
         calls.push(url);
         const stdout = new PassThrough();
         let killed = false;
@@ -50,31 +52,33 @@ export function fakeOpen(bytes, { chunk = 1000, delayMs = 1, filesize = bytes.le
         };
     };
     open.calls = calls;
+    open.options = options;
     return open;
 }
 
 export const PASSWORD = 'una-clave-de-prueba';
+export const OWNER = 'duena';
 
 // Servidor de prueba en un puerto libre, con yt-dlp y el buscador sustituidos por dobles
 export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers } = {}) {
-    const [{ createApp }, { Auth }, { AudioCache }, { ListStore }, { SessionStore, HistoryStore }] = await Promise.all([
-        import('../src/app.js'), import('../src/auth.js'), import('../src/audio.js'), import('../src/lists.js'), import('../src/session.js'),
+    const [{ createApp }, { Auth }, { AudioCache }, { UserStores }] = await Promise.all([
+        import('../src/app.js'), import('../src/auth.js'), import('../src/audio.js'), import('../src/stores.js'),
     ]);
     const dir = tempDataDir();
     const auth = new Auth(dir);
-    if (password) auth.setPassword(password);
+    // El dueño de las pruebas se llama «duena». Sus almacenes se exponen como s.lists, s.sessions, s.history.
+    const owner = password ? auth.createUser(OWNER, password) : null;
     const open = fakeOpen(bytes, openOptions);
     const cache = new AudioCache({ maxBytes: 1e9, trackMaxBytes: 1e9, open, ...cacheOptions });
-    const lists = new ListStore(dir);
-    const sessions = new SessionStore(dir);
-    const history = new HistoryStore(dir);
+    const stores = new UserStores(dir);
+    const { lists, sessions, history } = owner ? stores.for(owner.id) : {};
     const { AppDist } = await import('../src/appdist.js');
     const { MatchStore } = await import('../src/matches.js');
     const { PendingImports } = await import('../src/importers.js');
     // Buscador de coincidencias y lectores de listas de fuera: dobles, sin red
     const matches = new MatchStore(dir, { search: matchSearch ?? (async () => []) });
     const app = createApp({
-        auth, cache, open, lists, sessions, history, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
+        auth, cache, open, stores, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
         matches, importers: importers ?? {}, pending: new PendingImports(),
         search: search ?? (async q => [{ key: 'yt:dQw4w9WgXcQ', title: `resultado de ${q}` }]),
     });
@@ -84,14 +88,15 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
         ...init,
         headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
     });
-    const login = async (pw = PASSWORD) => api('/api/login', { method: 'POST', body: JSON.stringify({ password: pw, device: 'prueba' }) });
+    // Sin `user` entra el dueño, como hacen las versiones de la app anteriores a las cuentas
+    const login = async (pw = PASSWORD, user = undefined, device = 'prueba') => api('/api/login', { method: 'POST', body: JSON.stringify({ user, password: pw, device }) });
     const token = password ? (await (await login()).json()).token : null;
-    // Atajo: petición autenticada con cuerpo JSON → { status, body }
-    const call = async (method, path, body) => {
-        const res = await api(path, { method, token, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    // Atajo: petición autenticada con cuerpo JSON → { status, body }. `as` = token de otro dispositivo o usuario.
+    const call = async (method, path, body, as = token) => {
+        const res = await api(path, { method, token: as, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
         return { status: res.status, body: await res.json().catch(() => null) };
     };
-    return { dir, auth, cache, open, lists, sessions, history, matches, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
+    return { dir, auth, owner, stores, cache, open, lists, sessions, history, matches, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
 }
 
 export async function collect(iterable) {
