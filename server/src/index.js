@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { Auth } from './auth.js';
 import { AudioCache } from './audio.js';
 import { createApp } from './app.js';
+import { AppDist } from './appdist.js';
 import { ListStore } from './lists.js';
 import { HistoryStore, SessionStore } from './session.js';
 import { searchYoutube } from './sources.js';
@@ -28,6 +29,7 @@ const app = createApp({
     lists: new ListStore(config.dataDir),
     sessions: new SessionStore(config.dataDir),
     history: new HistoryStore(config.dataDir),
+    appDist: new AppDist(config.dataDir),
     prefetchDelayMs: config.prefetchDelayMs,
     version: config.version,
     log,

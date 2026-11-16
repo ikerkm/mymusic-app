@@ -1,6 +1,16 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// Clave de firma definitiva: Z:\AI\MyMusic\keys\keystore.properties, fuera del repositorio
+// (copia de seguridad en la Raspberry). Android solo instala una versión encima de otra si las
+// dos van firmadas con la misma clave, así que todas las compilaciones usan esta.
+val keystore = Properties().apply {
+    val file = rootProject.file("../keys/keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -11,13 +21,31 @@ android {
         applicationId = "com.mymusic.app"
         minSdk = 26          // Android 8.0: cubre el Pocophone F1 (Android 10)
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        // -PversionCodeOverride=N compila una versión «más vieja» para probar la actualización en el emulador
+        versionCode = (project.findProperty("versionCodeOverride") as String?)?.toInt() ?: 3
+        versionName = "0.3.0"
+    }
+
+    signingConfigs {
+        if (keystore.containsKey("storeFile")) {
+            create("mymusic") {
+                storeFile = rootProject.file(keystore.getProperty("storeFile"))
+                storePassword = keystore.getProperty("storePassword")
+                keyAlias = keystore.getProperty("keyAlias")
+                keyPassword = keystore.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
+        val mymusic = signingConfigs.findByName("mymusic")
+        // debug: la que se usa en el emulador (permite inspeccionarla). release: la que va a los móviles.
+        debug {
+            if (mymusic != null) signingConfig = mymusic
+        }
         release {
             isMinifyEnabled = false
+            if (mymusic != null) signingConfig = mymusic
         }
     }
 

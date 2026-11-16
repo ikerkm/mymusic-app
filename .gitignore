@@ -21,3 +21,6 @@ android/.kotlin/
 *.aab
 .idea/
 *.iml
+
+# Clave de firma de la app y su contrasena: fuera del repositorio (copia en la Raspberry)
+/keys/

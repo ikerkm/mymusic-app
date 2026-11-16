@@ -34,7 +34,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, lists, sessions, history, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, lists, sessions, history, appDist, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -310,6 +310,24 @@ export function createApp({ auth, cache, search, open, lists, sessions, history,
             entries = entries.filter(e => !seen.has(e.track.key) && seen.add(e.track.key)).slice(0, limit);
         }
         res.json({ entries });
+    });
+
+    // --- Actualización de la app ---
+    priv.get('/app/latest', (req, res) => {
+        const latest = appDist?.latest();
+        if (!latest) return res.status(404).json({ error: 'no_app' });
+        const { path, ...info } = latest;
+        res.json(info);
+    });
+
+    priv.get('/app/download', (req, res) => {
+        const latest = appDist?.latest();
+        if (!latest) return res.status(404).json({ error: 'no_app' });
+        log(`[app] descarga de la versión ${latest.versionName} (${latest.versionCode}) desde ${req.device.device}`);
+        res.set({ 'Content-Type': 'application/vnd.android.package-archive', 'Cache-Control': 'private, no-store' });
+        res.sendFile(latest.path, { dotfiles: 'allow' }, error => {
+            if (error && !res.headersSent) res.status(500).json({ error: 'download_failed' });
+        });
     });
 
     app.use('/api', priv);

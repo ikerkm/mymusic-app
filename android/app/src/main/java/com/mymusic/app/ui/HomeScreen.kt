@@ -1,6 +1,7 @@
 package com.mymusic.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.mymusic.app.AppViewModel
 import com.mymusic.app.Overlay
 import com.mymusic.app.SheetTarget
+import com.mymusic.app.UpdateState
 import com.mymusic.app.data.ListSummary
 import com.mymusic.app.playback.PlayerState
 
@@ -47,6 +49,8 @@ fun HomeScreen(vm: AppViewModel, state: PlayerState) {
                 Icon(MmIcons.Settings, contentDescription = null, tint = Mm.Tx, modifier = Modifier.size(22.dp).alpha(0.35f))
             }
         }
+
+        if (vm.update != UpdateState.None) item { UpdateBanner(vm) }
 
         if (session != null && current != null) {
             item {
@@ -108,6 +112,51 @@ fun HomeScreen(vm: AppViewModel, state: PlayerState) {
             }
         }
         item { Spacer(Modifier.height(12.dp)) }
+    }
+}
+
+/**
+ * Aviso de versión nueva. «Actualizar» descarga el instalable del servidor y abre el instalador
+ * de Android, que siempre pide confirmar (no se puede instalar en silencio).
+ */
+@Composable
+private fun UpdateBanner(vm: AppViewModel) {
+    val state = vm.update
+    val release = when (state) {
+        is UpdateState.Available -> state.release
+        is UpdateState.Downloading -> state.release
+        is UpdateState.Failed -> state.release
+        UpdateState.None -> return
+    }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Mm.Sur)
+            .border(1.dp, Mm.Acc.copy(alpha = 0.5f), RoundedCornerShape(16.dp)).padding(12.dp).testTag("update"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Hay una versión nueva: ${release.versionName}", color = Mm.Tx, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                val detail = when (state) {
+                    is UpdateState.Downloading -> "Descargando… ${(state.progress * 100).toInt()} %"
+                    is UpdateState.Failed -> state.message
+                    else -> release.notes ?: "Se descarga de tu servidor; Android te pedirá confirmar."
+                }
+                Text(detail, color = if (state is UpdateState.Failed) Mm.Yt else Mm.Mut, fontSize = 12.sp)
+            }
+            if (state !is UpdateState.Downloading) {
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (state is UpdateState.Failed) "Reintentar" else "Actualizar",
+                    color = Mm.OnAcc, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(Mm.Acc).clickable { vm.installUpdate() }
+                        .padding(horizontal = 14.dp, vertical = 9.dp).testTag("updateButton"),
+                )
+            }
+        }
+        if (state is UpdateState.Downloading) {
+            Box(Modifier.padding(top = 10.dp).fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50)).background(Mm.Sur2)) {
+                Box(Modifier.fillMaxWidth(state.progress.coerceIn(0f, 1f)).height(4.dp).background(Mm.Acc))
+            }
+        }
     }
 }
 

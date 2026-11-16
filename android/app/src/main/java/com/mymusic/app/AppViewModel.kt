@@ -1,15 +1,18 @@
 package com.mymusic.app
 
 import android.app.Application
+import android.content.Intent
 import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mymusic.app.data.Api
 import com.mymusic.app.data.ApiException
+import com.mymusic.app.data.AppRelease
 import com.mymusic.app.data.Entry
 import com.mymusic.app.data.ListDetail
 import com.mymusic.app.data.ListSummary
@@ -20,6 +23,7 @@ import com.mymusic.app.playback.PlayerConnection
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 /** Dirección propuesta en la pantalla de login (D11 de la SPEC). */
 const val DEFAULT_SERVER = "https://mymusic.example.com"
@@ -32,6 +36,14 @@ sealed interface Overlay {
     data object Queue : Overlay
     data object History : Overlay
     data class ListDetail(val id: String) : Overlay
+}
+
+/** En qué punto está la actualización de la app. */
+sealed interface UpdateState {
+    data object None : UpdateState
+    data class Available(val release: AppRelease) : UpdateState
+    data class Downloading(val release: AppRelease, val progress: Float) : UpdateState
+    data class Failed(val release: AppRelease, val message: String) : UpdateState
 }
 
 /** Canción sobre la que se ha abierto el menú. `listId` solo cuando se abre desde dentro de una lista. */
@@ -81,6 +93,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Navegación y avisos ---
     val overlays = mutableStateListOf<Overlay>()
+    var update by mutableStateOf<UpdateState>(UpdateState.None)
+        private set
     var sheet by mutableStateOf<SheetTarget?>(null)
     var pickFor by mutableStateOf<Track?>(null)    // canción para la que se está eligiendo lista
     var notice by mutableStateOf<String?>(null)    // aviso breve en pantalla
@@ -206,9 +220,50 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------ inicio
 
     fun refreshHome() = run {
+        checkUpdate()
         lists = api.lists()
         session = api.session()
         recent = api.history(6, distinct = true)
+    }
+
+    // ------------------------------------------------------------------ actualización de la app
+
+    /** Pregunta al servidor si hay una versión más nueva que la instalada. */
+    fun checkUpdate() {
+        if (update is UpdateState.Downloading) return
+        viewModelScope.launch {
+            val latest = runCatching { api.latestApp() }.getOrNull()
+            if (update is UpdateState.Downloading) return@launch
+            update = if (latest != null && latest.versionCode > BuildConfig.VERSION_CODE) UpdateState.Available(latest) else UpdateState.None
+        }
+    }
+
+    /** Descarga el instalable del servidor, lo comprueba y abre el instalador de Android (que pide confirmar). */
+    fun installUpdate() {
+        val release = when (val state = update) {
+            is UpdateState.Available -> state.release
+            is UpdateState.Failed -> state.release
+            else -> return
+        }
+        update = UpdateState.Downloading(release, 0f)
+        viewModelScope.launch {
+            try {
+                val app = getApplication<Application>()
+                val file = File(app.cacheDir, "updates/mymusic-${release.versionCode}.apk")
+                api.downloadApp(release, file) { progress -> update = UpdateState.Downloading(release, progress) }
+                update = UpdateState.Available(release)
+                val uri = FileProvider.getUriForFile(app, "${app.packageName}.files", file)
+                app.startActivity(
+                    Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(uri, "application/vnd.android.package-archive")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED) else update = UpdateState.Failed(release, "No se pudo descargar la actualización.")
+            } catch (e: Exception) {
+                update = UpdateState.Failed(release, "No se pudo descargar la actualización.")
+            }
+        }
     }
 
     private fun refreshRecent() = viewModelScope.launch {

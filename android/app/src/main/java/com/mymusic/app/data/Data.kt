@@ -5,9 +5,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.security.MessageDigest
 
 /** Una canción tal como la describe el servidor. `key` es «plataforma:id» (p. ej. yt:dQw4w9WgXcQ). */
 data class Track(
@@ -43,6 +46,9 @@ data class SessionView(
 )
 
 data class QueuePage(val index: Int, val count: Int, val entries: List<Entry>)
+
+/** Versión de la app publicada en el servidor. */
+data class AppRelease(val versionCode: Int, val versionName: String, val sha256: String, val size: Long, val notes: String?)
 
 /** Dirección del servidor y token de este dispositivo. Almacenamiento privado de la app. */
 class Prefs(context: Context) {
@@ -232,6 +238,56 @@ class Api(private val prefs: Prefs) {
     suspend fun history(limit: Int, distinct: Boolean): List<Track> =
         call("GET", "/api/history?limit=$limit" + if (distinct) "&distinct=1" else "").getJSONArray("entries")
             .let { a -> List(a.length()) { a.getJSONObject(it).getJSONObject("track").toTrack() } }
+
+    // --- Actualización de la app ---
+
+    /** La versión publicada en el servidor, o null si no hay ninguna. */
+    suspend fun latestApp(): AppRelease? = try {
+        call("GET", "/api/app/latest").let { AppRelease(it.getInt("versionCode"), it.optString("versionName"), it.optString("sha256"), it.optLong("size"), it.str("notes")) }
+    } catch (e: ApiException) {
+        if (e.status == 404) null else throw e
+    }
+
+    /**
+     * Descarga el instalable a `target` y comprueba que es exactamente el que anuncia el servidor
+     * (suma SHA-256). `onProgress` recibe el avance de 0 a 1.
+     */
+    suspend fun downloadApp(release: AppRelease, target: File, onProgress: (Float) -> Unit) = withContext(Dispatchers.IO) {
+        val conn = URL(prefs.serverUrl.orEmpty() + "/api/app/download").openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 60_000
+            conn.setRequestProperty("Authorization", "Bearer ${prefs.token.orEmpty()}")
+            if (conn.responseCode != 200) throw ApiException(conn.responseCode, "download_failed")
+            val digest = MessageDigest.getInstance("SHA-256")
+            target.parentFile?.mkdirs()
+            val partial = File(target.path + ".part")
+            var done = 0L
+            var shown = -1
+            conn.inputStream.use { input ->
+                partial.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        digest.update(buffer, 0, read)
+                        done += read
+                        val percent = if (release.size > 0) (done * 100 / release.size).toInt() else 0
+                        if (percent != shown) {
+                            shown = percent
+                            onProgress(percent.coerceIn(0, 100) / 100f)
+                        }
+                    }
+                }
+            }
+            val sum = digest.digest().joinToString("") { "%02x".format(it) }
+            if (!sum.equals(release.sha256, ignoreCase = true)) throw IOException("El instalable descargado no coincide con el publicado")
+            if (!partial.renameTo(target)) throw IOException("No se pudo guardar el instalable")
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     companion object {
         /** «mymusic.ejemplo.com/» → «https://mymusic.ejemplo.com» */

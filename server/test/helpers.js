@@ -68,8 +68,9 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
     const lists = new ListStore(dir);
     const sessions = new SessionStore(dir);
     const history = new HistoryStore(dir);
+    const { AppDist } = await import('../src/appdist.js');
     const app = createApp({
-        auth, cache, open, lists, sessions, history, prefetchDelayMs, version: 'test',
+        auth, cache, open, lists, sessions, history, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
         search: search ?? (async q => [{ key: 'yt:dQw4w9WgXcQ', title: `resultado de ${q}` }]),
     });
     const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
