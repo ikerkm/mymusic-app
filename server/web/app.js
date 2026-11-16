@@ -592,17 +592,86 @@ const IMPORT_ERRORS = {
     network: 'Sin conexión con el servidor, o la lista tarda demasiado en leerse.',
 };
 
+// Enlaces de canciones de Spotify dentro de un texto: lo que copia su programa de escritorio al
+// seleccionar una lista entera (Ctrl+A, Ctrl+C). Es la forma de traer listas de más de 100.
+const TRACK_LINK = /open\.spotify\.com\/(?:intl-[a-z]{2}\/)?track\/([A-Za-z0-9]{22})|spotify:track:([A-Za-z0-9]{22})/gi;
+function trackIdsIn(text) {
+    const ids = new Set();
+    for (const match of String(text).matchAll(TRACK_LINK)) ids.add(match[1] ?? match[2]);
+    return [...ids];
+}
+const WHOLE_LIST_TIP = 'Para traer entera una lista de Spotify de más de 100 canciones: ábrela en Spotify de escritorio, selecciona todas (Ctrl+A), copia (Ctrl+C) y pega aquí.';
+const LINKS_PER_BATCH = 50;
+
 function openImport(list) {
     openModal((close, modal) => {
         let preview = null;
         let reading = 0;
-        const status = h('div');
+        const status = h('div', null, h('p.note', null, WHOLE_LIST_TIP));
         const add = h('button.btn.pri', { type: 'button', disabled: true }, 'Añadir canciones');
-        const input = h('input.in', { type: 'url', placeholder: 'https://…', autocomplete: 'off', spellcheck: false });
+        const input = h('input.in', { type: 'text', placeholder: 'https://…', autocomplete: 'off', spellcheck: false });
+
+        // Un bloque de enlaces de canciones: se lee por tandas, con el avance a la vista
+        const readLinks = async ids => {
+            const turn = ++reading;
+            preview = null;
+            add.disabled = true;
+            add.textContent = 'Añadir canciones';
+            const label = h('p.note');
+            const fill = h('i');
+            status.replaceChildren(label, h('div.bar', null, fill));
+            const show = done => {
+                label.textContent = `Leyendo canciones… ${done} de ${ids.length}`;
+                fill.style.width = `${(done / ids.length) * 100}%`;
+            };
+            show(0);
+            let result = null;
+            let failed = 0;
+            let cutAt = null;
+            for (let at = 0; at < ids.length; at += LINKS_PER_BATCH) {
+                const links = ids.slice(at, at + LINKS_PER_BATCH).map(id => `https://open.spotify.com/track/${id}`);
+                let reply = null;
+                for (let attempt = 1; attempt <= 2 && !reply; attempt++) {
+                    try {
+                        reply = await api('POST', '/import/links', { listId: list.id, links, importId: result?.importId }, 110000);
+                    } catch (error) {
+                        if (error.status === 401 || error.status === 404 || error.status === 410) break;
+                        if (attempt === 1) await sleep(2000);
+                    }
+                    if (turn !== reading || !modal.isConnected) return;
+                }
+                if (!reply) {
+                    cutAt = at;
+                    break;
+                }
+                result = reply;
+                failed += reply.batch?.failed ?? 0;
+                show(Math.min(ids.length, at + LINKS_PER_BATCH));
+            }
+            if (!result || result.count === 0) {
+                return status.replaceChildren(h('p.err', null, 'No se ha podido leer ninguna canción. Prueba otra vez.'));
+            }
+            preview = result;
+            // Los avisos que no tocan valen false: se quitan antes de pintar
+            status.replaceChildren(...[
+                h('div.preview', null, cover(result.thumb, 's48', result.importId),
+                    h('div.tx', null, h('b', null, 'Canciones pegadas'), h('div.mut', null, `${songs(result.count)} `, badge('spotify')))),
+                h('div.counts', null,
+                    h('span.new', null, h('b', null, String(result.newCount)), ' nuevas'),
+                    h('span.mut', null, h('b', null, String(result.already)), ' ya están en tu lista')),
+                cutAt !== null && h('p.err', null, `La lectura se ha cortado en la canción ${cutAt + 1} de ${ids.length}. Puedes añadir lo leído y volver a pegar el bloque: las que ya estén no se duplican.`),
+                failed > 0 && h('p.err', null, `${failed === 1 ? '1 canción no se ha podido leer' : `${failed} canciones no se han podido leer`}. Vuelve a pegar el bloque para reintentarlas: las que ya estén no se duplican.`),
+                h('p.note', null, 'Las canciones de Spotify se buscan en YouTube la primera vez que suenan.'),
+            ].filter(Boolean));
+            add.disabled = result.newCount === 0;
+            add.textContent = result.newCount === 0 ? 'Nada nuevo que añadir' : `Añadir ${songs(result.newCount)}`;
+        };
 
         const read = async () => {
             const url = input.value.trim();
             if (!url) return;
+            const pasted = /\/playlist\//.test(url) ? [] : trackIdsIn(url);
+            if (pasted.length > 0) return readLinks(pasted);
             const turn = ++reading;
             preview = null;
             add.disabled = true;
@@ -622,6 +691,7 @@ function openImport(list) {
                     h('p.note', null, [
                         result.platform === 'spotify' ? 'Las canciones de Spotify se buscan en YouTube la primera vez que suenan.' : null,
                         result.truncated ? 'De esta lista solo se pueden leer las 100 primeras canciones.' : null,
+                        result.truncated && result.platform === 'spotify' ? WHOLE_LIST_TIP : null,
                     ].filter(Boolean).join(' ')));
                 add.disabled = result.newCount === 0;
                 add.textContent = result.newCount === 0 ? 'Nada nuevo que añadir' : `Añadir ${songs(result.newCount)}`;
@@ -631,7 +701,15 @@ function openImport(list) {
             }
         };
         input.addEventListener('keydown', event => { if (event.key === 'Enter') read(); });
-        input.addEventListener('paste', () => setTimeout(read, 0));
+        input.addEventListener('paste', event => {
+            const text = event.clipboardData?.getData('text') ?? '';
+            const ids = /\/playlist\//.test(text) ? [] : trackIdsIn(text);
+            if (ids.length === 0) return void setTimeout(read, 0);
+            // Un bloque de varias líneas no cabe en la casilla: se deja escrito cuántos enlaces son
+            event.preventDefault();
+            input.value = ids.length === 1 ? `https://open.spotify.com/track/${ids[0]}` : `${ids.length} enlaces de canciones de Spotify`;
+            readLinks(ids);
+        });
         add.addEventListener('click', async () => {
             if (!preview) return;
             add.disabled = true;

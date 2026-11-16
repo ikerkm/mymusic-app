@@ -29,6 +29,10 @@ export function parseRange(header, total) {
 // El panel solo carga código y estilos propios; de fuera, únicamente las carátulas (imágenes)
 const WEB_CSP = "default-src 'self'; img-src 'self' https: data:; media-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
+// Enlaces de canciones que se admiten por llamada al importar un bloque, y cuántas se leen a la vez
+const LINKS_PER_CALL = 100;
+const LINKS_AT_ONCE = 4;
+
 const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.remoteAddress ?? 'desconocida');
 
 /**
@@ -477,6 +481,72 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             newCount: fresh,
             already: tracks.length - fresh,
             truncated: Boolean(found.truncated),
+        });
+    });
+
+    // Importar un bloque de enlaces de canciones de Spotify: lo que copia su programa al seleccionar
+    // una lista entera (su página pública solo enseña 100). Cada canción se lee de su propia página.
+    // El panel lo manda por tandas; todas se suman a la misma importación pendiente, que se confirma
+    // con /lists/:id/import como cualquier otra.
+    const spotifyTrackId = text => {
+        if (typeof text !== 'string' || text.length > 300) return null;
+        const uri = /^spotify:track:([A-Za-z0-9]{22})$/.exec(text.trim());
+        if (uri) return uri[1];
+        const link = parseLink(text.trim());
+        return link?.kind === 'sp-track' ? link.id : null;
+    };
+
+    priv.post('/import/links', async (req, res) => {
+        const list = req.ctx.lists.get(req.body?.listId);
+        if (!list) return res.status(404).json({ error: 'list_not_found' });
+        const links = req.body?.links;
+        if (!Array.isArray(links) || links.length === 0 || links.length > LINKS_PER_CALL) return res.status(400).json({ error: 'bad_request' });
+        let importId = req.body?.importId;
+        let ready = null;
+        if (importId !== undefined) {
+            ready = pending.get(importId);
+            if (!ready || !ready.links || ready.listId !== list.id || ready.userId !== req.user.id) return res.status(410).json({ error: 'import_expired' });
+        }
+
+        const ids = links.map(spotifyTrackId);
+        const ignored = ids.filter(id => !id).length;
+        const known = new Set((ready?.tracks ?? []).map(track => track.key));
+        const todo = [...new Set(ids.filter(Boolean))].filter(id => !known.has(`sp:${id}`));
+
+        // De cuatro en cuatro (medido: unas 14 canciones por segundo sin que Spotify se queje)
+        const read = new Array(todo.length).fill(null);
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(LINKS_AT_ONCE, todo.length) }, async () => {
+            while (next < todo.length) {
+                const at = next++;
+                for (let attempt = 1; attempt <= 2 && !read[at]; attempt++) {
+                    try {
+                        const track = cleanTrack(await importers.spotifyTrack(todo[at]));
+                        if (track?.title) read[at] = track;
+                    } catch { /* se reintenta una vez; si vuelve a fallar, cuenta como no leída */ }
+                }
+            }
+        }));
+        const fresh = read.filter(Boolean);
+        const tracks = [...(ready?.tracks ?? []), ...fresh];
+        const value = { userId: req.user.id, listId: list.id, tracks, links: true };
+        if (ready) pending.update(importId, value);
+        else importId = pending.put(value);
+
+        const present = new Set(list.tracks.map(track => track.key));
+        const newCount = tracks.filter(track => !present.has(track.key)).length;
+        const failed = todo.length - fresh.length;
+        log(`[importar] enlaces de Spotify: ${fresh.length} leídas${failed ? `, ${failed} sin leer` : ''}${ignored ? `, ${ignored} que no eran canciones` : ''}; van ${tracks.length} (${newCount} nuevas) para «${list.name}»`);
+        res.json({
+            importId,
+            platform: 'spotify',
+            title: 'Canciones pegadas',
+            thumb: tracks[0]?.thumb ?? null,
+            count: tracks.length,
+            newCount,
+            already: tracks.length - newCount,
+            truncated: false,
+            batch: { read: fresh.length, failed, ignored },
         });
     });
 

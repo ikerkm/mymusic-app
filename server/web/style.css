@@ -166,6 +166,8 @@ td.a{color:var(--mut)}
 .preview{display:flex;align-items:center;gap:12px;background:var(--sur2);border-radius:12px;padding:12px;margin-top:12px}
 .preview .tx{min-width:0}
 .preview b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{height:4px;border-radius:9px;background:var(--sur2);overflow:hidden;margin-top:8px}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
 .counts{display:flex;gap:18px;margin-top:12px;align-items:baseline}
 .counts b{font-size:18px}
 .counts .new b{color:var(--ok)}

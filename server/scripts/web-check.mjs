@@ -287,6 +287,32 @@ try {
     await js(press('.modal input', 'Enter'));
     check('importar: un enlace que no vale se explica', await until(`${text('.modal .err')}.includes('No reconozco')`, 10000), await js(text('.modal .err')));
     await shot('8_importar');
+
+    // Pegar un bloque de enlaces de canciones de Spotify (lo que copia su programa con Ctrl+A, Ctrl+C):
+    // así se traen listas de más de 100. Lee de Spotify de verdad, como buscar lee de YouTube.
+    const block = ['0ofHAoxe9vBkTCp2UQIavz', '0RO9W1xJoUEpq5MEelddFb', '57JVGBtBLCfHw2muk5416J'].map(id => `https://open.spotify.com/track/${id}`).join('\r\n');
+    await js(`(() => {
+        const input = document.querySelector('.modal input');
+        const data = new DataTransfer();
+        data.setData('text/plain', ${JSON.stringify(block)});
+        input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    const offered = await until(`${text('.modal .btn.pri')}.startsWith('Añadir 3') && ${text('.modal')}`, 30000);
+    check('pegar tres enlaces de canciones: las lee y ofrece añadirlas', Boolean(offered), await js(text('.modal .counts')));
+    check('el resumen no pinta «false» ni «undefined»', !/false|undefined|null/.test(String(offered)), String(offered).slice(0, 160));
+    await shot('8b_importar_enlaces');
+    await js(`document.querySelector('.modal .btn.pri').click()`);
+    check('las añade a la lista', await until(`document.querySelectorAll('.main tbody tr').length === 5`, 10000), await js(text('.toast')));
+    // Pegar el mismo bloque otra vez no duplica nada
+    await js(clickText('.listhead .btn', 'Importar'));
+    await until(`!!document.querySelector('.modal input')`);
+    await js(`(() => {
+        const input = document.querySelector('.modal input');
+        const data = new DataTransfer();
+        data.setData('text/plain', ${JSON.stringify(block)});
+        input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    check('pegarlas otra vez no duplica: nada nuevo que añadir', await until(`${text('.modal .btn.pri')} === 'Nada nuevo que añadir' && document.querySelector('.modal .btn.pri').disabled`, 30000), await js(text('.modal .counts')));
     await js(clickText('.modal .btn', 'Cancelar'));
 
     // 6. Ajustes

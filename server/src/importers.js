@@ -145,4 +145,11 @@ export class PendingImports {
         const item = this.items.get(id);
         return item && item.at >= this.now() - this.ttlMs ? item.value : null;
     }
+
+    /** Cambia lo guardado y renueva su plazo: una importación que se va leyendo por tandas. */
+    update(id, value) {
+        if (!this.get(id)) return false;
+        this.items.set(id, { at: this.now(), value });
+        return true;
+    }
 }
