@@ -1,0 +1,188 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createApp, parseRange } from '../src/app.js';
+import { Auth } from '../src/auth.js';
+import { AudioCache } from '../src/audio.js';
+import { parseKey } from '../src/sources.js';
+import { fakeAudio, fakeOpen, tempDataDir } from './helpers.js';
+
+const PASSWORD = 'una-clave-de-prueba';
+const KEY = 'yt:dQw4w9WgXcQ';
+
+// Servidor de prueba en un puerto libre, con yt-dlp y el buscador sustituidos por dobles
+async function start({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search } = {}) {
+    const dir = tempDataDir();
+    const auth = new Auth(dir);
+    if (password) auth.setPassword(password);
+    const open = fakeOpen(bytes, openOptions);
+    const cache = new AudioCache({ maxBytes: 1e9, trackMaxBytes: 1e9, open, ...cacheOptions });
+    const app = createApp({ auth, cache, open, search: search ?? (async q => [{ key: KEY, title: `resultado de ${q}` }]), version: 'test' });
+    const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const api = (path, { token, ...init } = {}) => fetch(base + path, {
+        ...init,
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
+    });
+    const login = async (pw = PASSWORD) => api('/api/login', { method: 'POST', body: JSON.stringify({ password: pw, device: 'prueba' }) });
+    const token = password ? (await (await login()).json()).token : null;
+    return { dir, auth, cache, open, api, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
+}
+
+test('parseRange', () => {
+    assert.equal(parseRange(undefined, 100), null);
+    assert.deepEqual(parseRange('bytes=0-', 100), [0, 99]);
+    assert.deepEqual(parseRange('bytes=10-19', 100), [10, 19]);
+    assert.deepEqual(parseRange('bytes=90-500', 100), [90, 99]);
+    assert.deepEqual(parseRange('bytes=-30', 100), [70, 99]);
+    assert.equal(parseRange('bytes=100-', 100), 'invalid');
+    assert.equal(parseRange('bytes=50-40', 100), 'invalid');
+    assert.equal(parseRange('bytes=-', 100), 'invalid');
+    assert.equal(parseRange('items=0-5', 100), 'invalid');
+});
+
+test('parseKey solo admite claves de plataformas conocidas', () => {
+    assert.equal(parseKey(KEY).url, 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    for (const bad of ['yt:corto', 'yt:dQw4w9WgXcQ:extra', 'http://127.0.0.1/', 'file:///etc/passwd', 'yt:dQw4w9WgX/Q', '', undefined]) {
+        assert.equal(parseKey(bad), null, String(bad));
+    }
+});
+
+test('login: contraseña correcta da token; la incorrecta no, y a los 5 fallos bloquea', async () => {
+    const s = await start();
+    try {
+        assert.ok(s.token.length > 30);
+        assert.equal((await s.api('/api/me', { token: s.token })).status, 200);
+        for (let i = 0; i < 5; i++) assert.equal((await s.login('mala')).status, 401);
+        assert.equal((await s.login('mala')).status, 429);
+        assert.equal((await s.login(PASSWORD)).status, 429, 'bloqueado aunque ahora acierte');
+    } finally { await s.close(); }
+});
+
+test('en disco solo quedan hashes, nunca la contraseña ni el token', async () => {
+    const s = await start();
+    try {
+        const all = readdirSync(s.dir).filter(f => f.endsWith('.json')).map(f => readFileSync(join(s.dir, f), 'utf8')).join('\n');
+        assert.ok(!all.includes(PASSWORD));
+        assert.ok(!all.includes(s.token));
+    } finally { await s.close(); }
+});
+
+test('sin token, todo lo privado responde 401', async () => {
+    const s = await start();
+    try {
+        for (const path of ['/api/me', '/api/search?q=x', `/api/stream/${KEY}`]) {
+            assert.equal((await s.api(path)).status, 401, path);
+            assert.equal((await s.api(path, { token: 'x'.repeat(43) })).status, 401, path);
+        }
+        assert.equal(s.open.calls.length, 0, 'sin token no se lanza ninguna extracción');
+        assert.equal((await s.api('/api/health')).status, 200);
+    } finally { await s.close(); }
+});
+
+test('sin contraseña fijada no se puede entrar', async () => {
+    const s = await start({ password: null });
+    try {
+        assert.equal((await s.login('cualquiera')).status, 503);
+    } finally { await s.close(); }
+});
+
+test('cerrar sesión invalida el token y la lista anterior queda en removed/', async () => {
+    const s = await start();
+    try {
+        assert.equal((await s.api('/api/logout', { method: 'POST', token: s.token })).status, 200);
+        assert.equal((await s.api('/api/me', { token: s.token })).status, 401);
+        assert.ok(existsSync(join(s.dir, 'removed')));
+    } finally { await s.close(); }
+});
+
+test('cambiar la contraseña invalida las sesiones y conserva lo anterior en removed/', async () => {
+    const s = await start();
+    try {
+        s.auth.setPassword('otra-clave-distinta');
+        assert.equal((await s.api('/api/me', { token: s.token })).status, 401);
+        assert.equal((await s.login(PASSWORD)).status, 401);
+        assert.equal((await s.login('otra-clave-distinta')).status, 200);
+        assert.ok(readdirSync(join(s.dir, 'removed')).some(f => f.startsWith('auth.json.')));
+    } finally { await s.close(); }
+});
+
+test('búsqueda', async () => {
+    const s = await start();
+    try {
+        const res = await s.api('/api/search?q=amen%20break', { token: s.token });
+        assert.deepEqual(await res.json(), { results: [{ key: KEY, title: 'resultado de amen break' }] });
+        assert.equal((await s.api('/api/search?q=', { token: s.token })).status, 400);
+    } finally { await s.close(); }
+});
+
+test('audio completo: 200 con tipo y tamaño exactos', async () => {
+    const s = await start();
+    try {
+        const res = await s.api(`/api/stream/${KEY}`, { token: s.token });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('content-type'), 'audio/webm');
+        assert.equal(res.headers.get('content-length'), '40000');
+        assert.equal(res.headers.get('accept-ranges'), 'bytes');
+        assert.deepEqual(Buffer.from(await res.arrayBuffer()), s.bytes);
+    } finally { await s.close(); }
+});
+
+test('audio por tramos: 206 con Content-Range, y solo una extracción', async () => {
+    const s = await start();
+    try {
+        const cases = [['bytes=1000-1999', 1000, 1999], ['bytes=39000-', 39000, 39999], ['bytes=-500', 39500, 39999]];
+        for (const [range, start, end] of cases) {
+            const res = await s.api(`/api/stream/${KEY}`, { token: s.token, headers: { Range: range } });
+            assert.equal(res.status, 206, range);
+            assert.equal(res.headers.get('content-range'), `bytes ${start}-${end}/40000`);
+            assert.deepEqual(Buffer.from(await res.arrayBuffer()), s.bytes.subarray(start, end + 1), range);
+        }
+        const bad = await s.api(`/api/stream/${KEY}`, { token: s.token, headers: { Range: 'bytes=40000-' } });
+        assert.equal(bad.status, 416);
+        assert.equal(bad.headers.get('content-range'), 'bytes */40000');
+        assert.equal(s.open.calls.length, 1);
+    } finally { await s.close(); }
+});
+
+test('clave no válida: 400 sin lanzar extracción', async () => {
+    const s = await start();
+    try {
+        assert.equal((await s.api('/api/stream/yt:corto', { token: s.token })).status, 400);
+        assert.equal(s.open.calls.length, 0);
+    } finally { await s.close(); }
+});
+
+test('si la extracción falla: 502 con mensaje llano', async () => {
+    const s = await start({ bytes: Buffer.alloc(0), openOptions: { filesize: null, stderr: 'ERROR: [youtube] xx: Video unavailable' } });
+    try {
+        const res = await s.api(`/api/stream/${KEY}`, { token: s.token });
+        assert.equal(res.status, 502);
+        assert.deepEqual(await res.json(), { error: 'extract_failed', message: 'El vídeo no está disponible' });
+    } finally { await s.close(); }
+});
+
+test('pista que no cabe en memoria: se sirve en tubería directa, sin saltos', async () => {
+    const s = await start({ bytes: fakeAudio(30_000), cacheOptions: { trackMaxBytes: 10_000 } });
+    try {
+        const res = await s.api(`/api/stream/${KEY}`, { token: s.token });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers.get('accept-ranges'), 'none');
+        assert.deepEqual(Buffer.from(await res.arrayBuffer()), s.bytes);
+        assert.equal(s.cache.items.size, 0, 'no se queda en memoria');
+    } finally { await s.close(); }
+});
+
+test('si el cliente corta a media canción, el lector se libera', async () => {
+    const s = await start({ bytes: fakeAudio(400_000), openOptions: { delayMs: 5 } });
+    try {
+        const abort = new AbortController();
+        const res = await s.api(`/api/stream/${KEY}`, { token: s.token, signal: abort.signal });
+        await res.body.getReader().read();
+        abort.abort();
+        const buffer = s.cache.items.get(KEY);
+        for (let i = 0; i < 100 && buffer.readers > 0; i++) await new Promise(r => setTimeout(r, 10));
+        assert.equal(buffer.readers, 0);
+    } finally { await s.close(); }
+});

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Icono provisional: el cuadrado degradado del logo de la maqueta -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M30,14h48a16,16 0,0 1,16 16v48a16,16 0,0 1,-16 16h-48a16,16 0,0 1,-16 -16v-48a16,16 0,0 1,16 -16z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="94"
+                android:endY="94"
+                android:startX="14"
+                android:startY="14"
+                android:type="linear">
+                <item android:color="#FFFF6BD6" android:offset="0" />
+                <item android:color="#FF5B2BFF" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M45,38l28,16l-28,16z" />
+</vector>

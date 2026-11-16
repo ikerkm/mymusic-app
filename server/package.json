@@ -1,0 +1,19 @@
+{
+  "name": "mymusic-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Servidor de MyMusic: busca, extrae el audio al momento y lo sirve a la app",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.22.2",
+    "yt-search": "^2.13.1"
+  }
+}

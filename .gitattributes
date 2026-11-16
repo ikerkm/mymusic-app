@@ -1,0 +1,9 @@
+# Los scripts se ejecutan en el Flip (Linux): siempre con saltos de línea LF
+*.sh     text eol=lf
+*.mjs    text eol=lf
+*.js     text eol=lf
+gradlew  text eol=lf
+# Los .bat, siempre CRLF
+*.bat    text eol=crlf
+*.jar    binary
+.env.example text eol=lf
