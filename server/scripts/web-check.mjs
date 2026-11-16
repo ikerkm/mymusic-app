@@ -338,6 +338,151 @@ try {
     await sleep(1500);
     check('al recargar sigue fuera', await until(`!!document.querySelector('.login input[name=username]')`, 8000));
 
+    // 9. Pantalla estrecha (móvil): la estructura de la app, con el dedo
+    const M = 'móvil: ';
+    const center = expr => js(`(() => { const el = ${expr}; if (!el) return null; const b = el.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()`);
+    const touch = (type, x, y) => send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: Math.round(x), y: Math.round(y) }] });
+    const tapAt = async (x, y) => { await touch('touchStart', x, y); await sleep(60); await touch('touchEnd'); await sleep(120); };
+    const tap = async expr => { const at = await center(expr); if (!at) throw new Error(`no encuentro ${expr}`); await tapAt(...at); };
+    const q = sel => `document.querySelector(${JSON.stringify(sel)})`;
+    const byText = (sel, label) => `[...document.querySelectorAll(${JSON.stringify(sel)})].find(e => e.textContent.trim().startsWith(${JSON.stringify(label)}))`;
+    const fits = `document.documentElement.scrollWidth <= window.innerWidth && (!document.querySelector('.main') || document.querySelector('.main').scrollWidth <= document.querySelector('.main').clientWidth)`;
+    const mKeys = `[...document.querySelectorAll('.main .row[data-key]')].map(row => row.dataset.key).join(' ')`;
+    const mList = `${listName} m`;
+    const shown = sel => `(document.querySelector(${JSON.stringify(sel)})?.getClientRects().length > 0)`;       // vale también para lo que va «fixed»
+
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await send('Page.navigate', { url: `${base}/` });
+    await until(`!!document.querySelector('.login input[name=username]')`);
+    await shot('m01_entrar');
+    await js(typeInto('.login input[name=username]', user));
+    await js(typeInto('.login input[name=password]', password));
+    await js(`document.querySelector('.login form').requestSubmit()`);
+    check(`${M}entra y abajo hay tres pestañas`, await until(`document.documentElement.classList.contains('m') && ${text('.main h3')} === 'Inicio' && [...document.querySelectorAll('.side .nav')].filter(e => e.offsetParent).length === 3`));
+    check(`${M}no hay barra lateral ni barra de escritorio`, await js(`!document.querySelector('.who').offsetParent && !document.querySelector('.player').offsetParent`));
+    await shot('m02_inicio');
+
+    await tap(byText('.side .nav', 'Listas'));
+    check(`${M}la pestaña Listas`, await until(`${text('.main h3')} === 'Listas' && !!document.querySelector('.fab')`));
+    await tap(q('.fab'));
+    await until(`!!document.querySelector('.modal input')`);
+    await shot('m03_nueva_lista');
+    await js(typeInto('.modal input', mList));
+    await js(clickText('.modal .btn', 'Guardar'));
+    check(`${M}«Nueva lista» la crea y la abre`, await until(`${text('.listhead h3')} === ${JSON.stringify(mList)}`));
+
+    await tap(byText('.side .nav', 'Buscar'));
+    await until(`!!document.querySelector('.searchbox input')`);
+    await js(typeInto('.searchbox input', process.env.MYMUSIC_CHECK_QUERY ?? 'rick astley never gonna give you up'));
+    await js(press('.searchbox input', 'Enter'));
+    const mFound = await until(`document.querySelectorAll('.main .row[data-key]').length`, 60000);
+    check(`${M}buscar pinta filas (no tabla) y caben en la pantalla`, mFound > 0 && await js(`!document.querySelector('.main table') && ${fits}`), `${mFound} filas`);
+    await shot('m04_buscar');
+
+    // Los tres puntos abren una hoja; tocar fuera la cierra SIN que el toque caiga en la fila de debajo
+    await tap(`document.querySelectorAll('.main .row[data-key]')[0].querySelector('.ib')`);
+    check(`${M}los tres puntos abren una hoja con la canción`, await until(`!!document.querySelector('.sheet .opt') && !!document.querySelector('.sheet .row b')`));
+    await shot('m05_hoja_de_cancion');
+    await tapAt(195, 150);
+    await sleep(600);
+    check(`${M}tocar fuera cierra la hoja y no reproduce lo de debajo`, await js(`!document.querySelector('.sheet') && !${A}.currentSrc && !document.querySelector('.mini').offsetParent`));
+    for (const index of [0, 1]) {
+        await tap(`document.querySelectorAll('.main .row[data-key]')[${index}].querySelector('.ib')`);
+        await until(`!!document.querySelector('.sheet .opt')`);
+        await tap(byText('.sheet .opt', 'Añadir a una lista'));
+        await until(`!!document.querySelector('.modal .pick')`);
+        if (index === 0) await shot('m06_hoja_de_listas');
+        await js(clickText('.modal .pick', mList));
+        await until(`${text('.toast')}.includes('Añadida')`, 8000);
+        await sleep(500);
+    }
+
+    await tap(byText('.side .nav', 'Listas'));
+    await until(`${text('.main h3')} === 'Listas' && !!${byText('.main .row', mList)}`, 8000);
+    await shot('m07_listas');
+    await tap(`${byText('.main .row', mList)}.querySelector('.t')`);
+    check(`${M}la lista se abre con sus dos canciones`, await until(`${text('.listhead h3')} === ${JSON.stringify(mList)} && document.querySelectorAll('.main .row[data-key]').length === 2`, 10000));
+    check(`${M}la cabecera de la lista cabe en la pantalla`, await js(fits));
+
+    // Mantener pulsada la segunda fila y subirla sobre la primera
+    const mBefore = await js(mKeys);
+    const [fromX, fromY] = await center(`document.querySelectorAll('.main .row[data-key]')[1].querySelector('.t')`);
+    const [, toY] = await center(`document.querySelectorAll('.main .row[data-key]')[0].querySelector('.t')`);
+    await touch('touchStart', fromX, fromY);
+    await sleep(700);
+    const lifted = await js(`!!document.querySelector('.main .row.lift')`);
+    for (let step = 1; step <= 6; step++) { await touch('touchMove', fromX, fromY + ((toY - fromY) * step) / 6); await sleep(40); }
+    await touch('touchEnd');
+    const mAfter = await until(`${mKeys} !== ${JSON.stringify(mBefore)} && ${mKeys}`, 8000);
+    check(`${M}mantener pulsada una fila y arrastrarla reordena`, lifted && Boolean(mAfter) && mAfter === mBefore.split(' ').reverse().join(' '), `${mBefore} → ${mAfter}`);
+    await sleep(600);
+    check(`${M}soltar la fila no reproduce nada`, await js(`!${A}.currentSrc`));
+
+    // Tocar una fila la reproduce y aparece el minirreproductor
+    await tap(`document.querySelectorAll('.main .row[data-key]')[0].querySelector('.t')`);
+    check(`${M}tocar una fila la reproduce`, await until(`!${A}.paused && ${A}.currentTime > 1`, 90000, 500), `segundo ${(await js(`${A}.currentTime`)).toFixed(1)}`);
+    check(`${M}aparece el minirreproductor con la canción`, await js(`!!document.querySelector('.mini').offsetParent && ${text('.mini b')}.length > 0 && document.querySelector('.main .row.on') !== null`), await js(text('.mini b')));
+    await shot('m08_lista_sonando');
+
+    await tap(q('.mini .t'));
+    check(`${M}tocar el minirreproductor abre el reproductor`, await until(`!!${shown('.full')} && ${text('.full .title')} === ${text('.mini b')}`, 5000), await js(text('.full .mid')));
+    await until(`${A}.duration > 0`, 15000);
+    await sleep(400);
+    await shot('m09_reproductor');
+    const mBar = await js(`(() => { const b = document.querySelector('.full .seek').getBoundingClientRect(); return [b.left, b.top + b.height / 2, b.width]; })()`);
+    await touch('touchStart', mBar[0] + mBar[2] * 0.2, mBar[1]);
+    for (const part of [0.3, 0.4, 0.5]) { await touch('touchMove', mBar[0] + mBar[2] * part, mBar[1]); await sleep(40); }
+    await touch('touchEnd');
+    const mHalf = await js(`${A}.duration / 2`);
+    check(`${M}arrastrar la barra salta a ese punto`, await until(`Math.abs(${A}.currentTime - ${mHalf}) < 12`, 15000), `segundo ${Math.round(await js(`${A}.currentTime`))} de ${Math.round(mHalf * 2)}`);
+    await tap(q('.full .big'));
+    check(`${M}pausa desde el reproductor`, await until(`${A}.paused`, 5000));
+    await tap(q('.full .big'));
+    check(`${M}y reanuda`, await until(`!${A}.paused`, 10000));
+
+    await tap(q('.full .foot .btn'));
+    check(`${M}la cola se abre a pantalla completa con la siguiente`, await until(`!!${shown('.drawer')} && document.querySelectorAll('.drawer .qrow').length === 2 && document.querySelector('.drawer').getBoundingClientRect().width >= window.innerWidth`, 8000));
+    await shot('m10_cola');
+    await js('history.back()');
+    check(`${M}«atrás» cierra la cola y deja el reproductor`, await until(`!${shown('.drawer')} && !!${shown('.full')}`, 5000));
+    await js('history.back()');
+    check(`${M}«atrás» cierra el reproductor y sigue en la lista`, await until(`!${shown('.full')} && ${text('.listhead h3')} === ${JSON.stringify(mList)}`, 5000));
+    await js('history.back()');
+    check(`${M}«atrás» vuelve a la pantalla anterior (Listas)`, await until(`${text('.main h3')} === 'Listas'`, 5000));
+
+    // Girar a una ventana ancha y volver: cambia de estructura sin romperse y sin cortar la música
+    await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    check(`${M}al ensanchar pasa a la estructura de escritorio`, await until(`!document.documentElement.classList.contains('m') && !!document.querySelector('.player').offsetParent && !document.querySelector('.mini').offsetParent`, 5000));
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    check(`${M}y al estrechar vuelve, con la música sonando`, await until(`document.documentElement.classList.contains('m') && !!document.querySelector('.mini').offsetParent && !${A}.paused`, 5000));
+
+    await tap(byText('.side .nav', 'Inicio'));
+    await until(`${text('.main h3')} === 'Inicio'`);
+    await sleep(800);
+    check(`${M}Inicio cabe en la pantalla`, await js(fits));
+    await shot('m11_inicio_sonando');
+    await tap(q('.main .top .ib'));
+    check(`${M}Ajustes se abre desde Inicio`, await until(`${text('.modal h2')} === 'Ajustes' && ${text('.modal')}.includes(${JSON.stringify(user)})`, 5000));
+    await shot('m12_ajustes');
+    await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
+
+    // Limpieza: la lista de prueba a la papelera, desde la pestaña Listas
+    await tap(byText('.side .nav', 'Listas'));
+    await until(`!!${byText('.main .row', mList)}`, 8000);
+    await tap(`${byText('.main .row', mList)}.querySelector('.ib')`);
+    await until(`!!document.querySelector('.sheet .opt')`);
+    await tap(byText('.sheet .opt', 'Enviar a la papelera'));
+    await until(`!!document.querySelector('.modal .btn.pri')`);
+    await js(clickText('.modal .btn.pri', 'Enviar a la papelera'));
+    check(`${M}la lista de prueba va a la papelera y se queda en Listas`, await until(`${text('.main h3')} === 'Listas' && !${byText('.main .row', mList)}`, 10000));
+    await tap(byText('.side .nav', 'Inicio'));
+    await until(`${text('.main h3')} === 'Inicio'`);
+    await tap(q('.main .top .ib'));
+    await until(`!!document.querySelector('.modal')`);
+    await js(clickText('.modal .btn', 'Cerrar sesión'));
+    check(`${M}cerrar sesión vuelve a la pantalla de entrar`, await until(`!!document.querySelector('.login input[name=username]')`, 8000));
+
     // Respuestas que la propia prueba provoca y el navegador apunta en la consola: no son fallos
     const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/];
     const real = problems.filter(problem => !expected.some(pattern => pattern.test(problem)));

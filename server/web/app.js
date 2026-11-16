@@ -67,6 +67,115 @@ function badge(platform) {
 /** Lo que el servidor guarda de una canción (sin los adornos con los que la devuelve). */
 const bare = t => ({ key: t.key, title: t.title, artist: t.artist ?? null, durationSec: t.durationSec ?? null, thumb: t.thumb ?? null, platform: t.platform });
 
+// ---------------------------------------------------------------- pantalla estrecha (móvil)
+
+// En el móvil la estructura es la de la app (mockups/app-v1.html): pestañas abajo, minirreproductor,
+// reproductor a pantalla completa, filas que se tocan y menús como hojas. El punto de corte vive solo
+// aquí: la hoja de estilos se guía por la clase «m» de <html>.
+// (la segunda condición es un móvil tumbado; no alcanza a una tableta, ni siquiera con el teclado abierto)
+const narrow = window.matchMedia('(max-width: 700px), (max-width: 950px) and (max-height: 500px) and (pointer: coarse)');
+const mobile = () => narrow.matches;
+document.documentElement.classList.toggle('m', mobile());
+
+// Zona visible de verdad (en el iPhone el teclado tapa la parte de abajo sin cambiar el tamaño de la página)
+const viewport = window.visualViewport;
+function syncViewport() {
+    document.documentElement.style.setProperty('--vvh', `${viewport.height}px`);
+    document.documentElement.style.setProperty('--vvt', `${viewport.offsetTop}px`);
+}
+if (viewport) {
+    viewport.addEventListener('resize', syncViewport);
+    viewport.addEventListener('scroll', syncViewport);
+    syncViewport();
+}
+
+/** Tras cerrar algo con el dedo, ese mismo toque no debe «caer» en lo que había debajo. */
+function swallowClick() {
+    const stop = event => { event.stopPropagation(); event.preventDefault(); };
+    window.addEventListener('click', stop, { capture: true, once: true });
+    setTimeout(() => window.removeEventListener('click', stop, true), 400);
+}
+
+/**
+ * Reordenar con el dedo las filas hijas de `box`. Con `handle` (selector) se arrastra desde esa zona;
+ * sin él, manteniendo pulsada la fila. Al soltar llama a onMove(desde, hasta) con las posiciones.
+ */
+function touchReorder(box, { handle = null, onMove }) {
+    let drag = null;
+    const rows = () => [...box.children];
+    const clear = () => {
+        if (!drag) return;
+        clearTimeout(drag.timer);
+        cancelAnimationFrame(drag.frame);
+        drag.row.classList.remove('lift');
+        drag.target?.classList.remove('drop', 'after');
+        drag = null;
+    };
+    const aim = () => {
+        const all = rows();
+        const target = all.find(row => { const b = row.getBoundingClientRect(); return drag.y >= b.top && drag.y < b.bottom; }) ?? null;
+        if (target !== drag.target) drag.target?.classList.remove('drop', 'after');
+        drag.target = target === drag.row ? null : target;
+        if (drag.target) {
+            drag.target.classList.add('drop');
+            drag.target.classList.toggle('after', all.indexOf(drag.target) > drag.from);
+        }
+    };
+    const step = () => {        // cerca del borde, la lista se desplaza sola
+        if (!drag?.active) return;
+        const scroller = box.closest('.main, .drawer');
+        if (scroller) {
+            const b = scroller.getBoundingClientRect();
+            if (drag.y < b.top + 70) scroller.scrollTop -= 9;
+            else if (drag.y > b.bottom - 70) scroller.scrollTop += 9;
+            aim();
+        }
+        drag.frame = requestAnimationFrame(step);
+    };
+    const start = () => {
+        if (!drag) return;
+        drag.active = true;
+        drag.row.classList.add('lift');
+        try { navigator.vibrate?.(12); } catch { /* sin vibración */ }
+        step();
+    };
+    box.addEventListener('touchstart', event => {
+        clear();
+        if (event.touches.length !== 1) return;
+        const row = rows().find(item => item.contains(event.target));
+        if (!row) return;
+        if (handle ? !event.target.closest(handle) : event.target.closest('button')) return;
+        const touch = event.touches[0];
+        drag = { row, from: rows().indexOf(row), target: null, x: touch.clientX, y: touch.clientY, active: false, timer: 0, frame: 0 };
+        if (handle) start();
+        else drag.timer = setTimeout(start, 450);
+    }, { passive: true });
+    box.addEventListener('touchmove', event => {
+        if (!drag) return;
+        const touch = event.touches[0];
+        if (!drag.active) {
+            if (Math.hypot(touch.clientX - drag.x, touch.clientY - drag.y) > 10) clear();      // está desplazando la lista
+            return;
+        }
+        if (event.cancelable) event.preventDefault();
+        drag.x = touch.clientX;
+        drag.y = touch.clientY;
+        aim();
+    }, { passive: false });
+    const finish = commit => () => {
+        if (!drag) return;
+        const { active, from, target } = drag;
+        const to = target ? rows().indexOf(target) : -1;
+        clear();
+        if (!active) return;
+        swallowClick();
+        if (commit && to >= 0 && to !== from) onMove(from, to);
+    };
+    box.addEventListener('touchend', finish(true));
+    box.addEventListener('touchcancel', finish(false));
+    box.addEventListener('contextmenu', event => { if (drag) event.preventDefault(); });
+}
+
 // ---------------------------------------------------------------- servidor
 
 class ApiError extends Error {
@@ -130,6 +239,7 @@ const st = {
     list: null,
     search: { query: '', results: null, hint: null, busy: false, error: null },
     queue: { open: false, entries: [], count: 0, limit: 30 },
+    full: false,                 // reproductor a pantalla completa (pantalla estrecha)
 };
 
 // ---------------------------------------------------------------- reproductor
@@ -430,9 +540,25 @@ function closeMenu() {
     menuEl = null;
     return true;
 }
-/** Menú emergente junto al punto (x, y). `items`: { label, run, danger } o 'sep'. */
-function openMenu(x, y, items) {
+/**
+ * Menú emergente junto al punto (x, y). `items`: { label, run, danger, icon } o 'sep'.
+ * En pantalla estrecha es una hoja que sube desde abajo, encabezada por la canción (`track`) si la hay.
+ */
+function openMenu(x, y, items, track = null) {
     closeMenu();
+    if (mobile()) {
+        const sheet = h('div.sheet', { role: 'menu' },
+            track && h('div.row', null, cover(track.thumb, 's40', track.key),
+                h('div.t', null, h('b', null, track.title),
+                    h('small', null, [track.artist, track.durationSec ? fmt(track.durationSec) : null].filter(Boolean).join(' · '), badge(track.platform)))),
+            items.map(item => (item === 'sep' ? h('hr') : h('button.opt', {
+                type: 'button', role: 'menuitem', class: item.danger ? 'danger' : '',
+                onclick: () => { closeMenu(); run(item.run); },
+            }, item.icon && icon(...item.icon.split(' ')), item.label))));
+        menuEl = h('div.dim.sheetdim', { onpointerdown: event => { if (event.target === menuEl) { closeMenu(); swallowClick(); } } }, sheet);
+        document.body.append(menuEl);
+        return;
+    }
     menuEl = h('div.menu', { role: 'menu' }, items.map(item => (item === 'sep' ? h('hr') : h('button', {
         type: 'button', role: 'menuitem', class: item.danger ? 'danger' : '',
         onclick: () => { closeMenu(); run(item.run); },
@@ -454,12 +580,18 @@ function openModal(build) {
         dim.remove();
     };
     const modal = h('div.modal', { role: 'dialog' });
-    const dim = h('div.dim', { onpointerdown: event => { if (event.target === dim) close(); } }, modal);
+    const dim = h('div.dim', { onpointerdown: event => {
+        if (event.target !== dim) return;
+        close();
+        if (event.pointerType !== 'mouse') swallowClick();
+    } }, modal);
     const entry = { close };
     modals.push(entry);
     modal.append(...[build(close, modal)].flat(Infinity).filter(Boolean));
     document.body.append(dim);
-    (modal.querySelector('input') ?? modal.querySelector('button'))?.focus();
+    // En el móvil, el foco en un campo saca el teclado: solo donde se viene a escribir (un nombre, un enlace)
+    if (mobile()) modal.querySelector('input[type=text]')?.focus();
+    else (modal.querySelector('input') ?? modal.querySelector('button'))?.focus();
     return close;
 }
 function closeAllOverlays() {
@@ -505,16 +637,16 @@ function confirmDialog(title, text, label) {
 
 function trackMenu(track, { listId = null, play }) {
     const items = [
-        { label: 'Reproducir', run: play },
-        { label: 'Reproducir a continuación', run: () => enqueue(track, 'next') },
-        { label: 'Añadir a la cola', run: () => enqueue(track, 'end') },
+        { label: 'Reproducir', icon: 'play f', run: play },
+        { label: 'Reproducir a continuación', icon: 'next f', run: () => enqueue(track, 'next') },
+        { label: 'Añadir a la cola', icon: 'queue', run: () => enqueue(track, 'end') },
         'sep',
-        { label: 'Añadir a una lista…', run: () => pickList(track) },
+        { label: 'Añadir a una lista…', icon: 'listadd', run: () => pickList(track) },
     ];
-    if (track.key.startsWith('sp:')) items.push({ label: 'Cambiar coincidencia…', run: () => openMatch(track) });
+    if (track.key.startsWith('sp:')) items.push({ label: 'Cambiar coincidencia…', icon: 'swap', run: () => openMatch(track) });
     if (listId) {
         items.push('sep', {
-            label: 'Quitar de la lista', danger: true,
+            label: 'Quitar de la lista', icon: 'bin', danger: true,
             run: async () => {
                 await api('DELETE', `/lists/${listId}/tracks/${enc(track.key)}`);
                 toast('Quitada de la lista');
@@ -795,9 +927,95 @@ function buildShell() {
     const main = h('main.main');
     const drawer = h('aside.drawer.hidden');
     const bar = buildBar();
-    const app = h('div.app', null, side, main, bar.el);
-    root.replaceChildren(app, drawer);
-    ui = { app, side, main, drawer, bar, shown: null };
+    const mini = buildMini();
+    const full = buildFull();
+    const app = h('div.app', null, side, main, bar.el, mini.el);
+    root.replaceChildren(app, full.el, drawer);
+    ui = { app, side, main, drawer, bar, mini, full, shown: null };
+}
+
+// Pantalla estrecha: minirreproductor sobre las pestañas (tocarlo abre el reproductor)
+function buildMini() {
+    const m = { coverKey: undefined };
+    m.cover = cover(null, 's36');
+    m.title = h('b');
+    m.sub = h('small');
+    m.playIcon = h('span', null, icon('play', 'f'));
+    m.play = h('button.ib', { type: 'button', title: 'Reproducir', onclick: event => { event.stopPropagation(); togglePlay(); } }, m.playIcon);
+    m.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: event => { event.stopPropagation(); next(); } }, icon('next', 'f'));
+    m.fill = h('i');
+    m.el = h('div.mini.hidden', { title: 'Abrir el reproductor', onclick: openFull }, m.cover, h('div.t', null, m.title, m.sub), m.play, m.next, m.fill);
+    return m;
+}
+
+// Pantalla estrecha: reproductor a pantalla completa (pantalla 8 de la maqueta de la app)
+function buildFull() {
+    const f = { coverKey: undefined, seeking: false };
+    f.fromLabel = h('span');
+    f.from = h('b');
+    f.cover = cover(null, '');
+    f.title = h('div.title');
+    f.artist = h('div.artist');
+    f.cur = h('span', null, '0:00');
+    f.dur = h('span', null, '0:00');
+    f.fill = h('i');
+    f.seek = h('div.seek', { title: 'Mover' }, h('div', null, f.fill));
+    f.shuffle = h('button.ib', { type: 'button', title: 'Aleatorio', onclick: () => run(toggleShuffle) }, icon('shuffle'));
+    f.prev = h('button.ib', { type: 'button', title: 'Anterior', onclick: prev }, icon('prev', 'f'));
+    f.playIcon = h('span', null, icon('play', 'f'));
+    f.play = h('button.big', { type: 'button', title: 'Reproducir', onclick: () => togglePlay() }, f.playIcon);
+    f.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: next }, icon('next', 'f'));
+    f.repeat = h('button.ib', { type: 'button', title: 'Repetir', onclick: () => run(cycleRepeat) }, icon('repeat'));
+    f.count = h('span.mut');
+    // «Reproducir» no entra en este menú: la canción ya suena, y pedirla suelta cortaría la lista
+    const more = () => pl.track && openMenu(0, 0, trackMenu(pl.track, { play: () => {} }).slice(1), pl.track);
+    f.el = h('div.full.hidden', { role: 'dialog' },
+        h('div.top', null,
+            h('button.ib', { type: 'button', title: 'Cerrar', onclick: closeFull }, icon('down')),
+            h('div.mid', null, f.fromLabel, f.from),
+            h('button.ib', { type: 'button', title: 'Más', onclick: more }, icon('more', 'f'))),
+        h('div.art', null, f.cover),
+        h('div.meta', null,
+            h('div.tx', null, f.title, f.artist),
+            h('button.ib', { type: 'button', title: 'Añadir a una lista', onclick: () => pl.track && pickList(pl.track) }, icon('listadd'))),
+        f.seek,
+        h('div.times', null, f.cur, f.dur),
+        h('div.fctl', null, f.shuffle, f.prev, f.play, f.next, f.repeat),
+        h('div.foot', null, h('button.btn', { type: 'button', onclick: toggleQueue }, icon('queue', 'sm'), 'Cola'), f.count));
+
+    // La barra se arrastra con el dedo; el salto se hace al soltar
+    let dragging = false;
+    const ratio = event => { const box = f.seek.getBoundingClientRect(); return Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)); };
+    const show = r => { f.fill.style.width = `${r * 100}%`; f.cur.textContent = fmt(r * duration()); };
+    const end = (event, apply) => {
+        if (!dragging) return;
+        dragging = false;
+        f.seeking = false;
+        if (apply) audio.currentTime = ratio(event) * duration();
+        updateProgress();
+    };
+    f.seek.addEventListener('pointerdown', event => {
+        if (!pl.key || !duration()) return;
+        dragging = true;
+        f.seeking = true;
+        try { f.seek.setPointerCapture(event.pointerId); } catch { /* sin captura: vale igual */ }
+        show(ratio(event));
+    });
+    f.seek.addEventListener('pointermove', event => { if (dragging) show(ratio(event)); });
+    f.seek.addEventListener('pointerup', event => end(event, true));
+    f.seek.addEventListener('pointercancel', event => end(event, false));
+    return f;
+}
+
+function openFull() {
+    if (!ui || !pl.track) return;
+    st.full = true;
+    ui.full.el.classList.remove('hidden');
+    updateBar();
+}
+function closeFull() {
+    st.full = false;
+    ui?.full.el.classList.add('hidden');
 }
 
 function buildBar() {
@@ -865,6 +1083,40 @@ function updateBar() {
     b.repeat.title = { off: 'Repetir: no', all: 'Repetir: toda la lista', one: 'Repetir: esta canción' }[session?.repeat ?? 'off'];
     for (const button of [b.shuffle, b.repeat, b.prev, b.next]) button.disabled = !session;
     b.queue.classList.toggle('on', st.queue.open);
+
+    // Lo mismo en el minirreproductor y en el reproductor a pantalla completa (pantalla estrecha)
+    const m = ui.mini;
+    const f = ui.full;
+    ui.app.classList.toggle('has-mini', Boolean(track));
+    m.el.classList.toggle('hidden', !track);
+    if (!track && st.full) closeFull();
+    if (m.coverKey !== (track?.key ?? null)) {
+        m.coverKey = track?.key ?? null;
+        for (const [part, size] of [[m, 's36'], [f, '']]) {
+            const fresh = cover(track?.thumb, size, track?.key ?? 'x');
+            part.cover.replaceWith(fresh);
+            part.cover = fresh;
+        }
+    }
+    m.title.textContent = track?.title ?? '';
+    m.sub.textContent = pl.error ?? track?.artist ?? '';
+    m.sub.classList.toggle('bad', Boolean(pl.error));
+    f.title.textContent = track?.title ?? '';
+    f.artist.replaceChildren(pl.error ?? track?.artist ?? '', ...[!pl.error && track ? badge(track.platform) : null].filter(Boolean));
+    f.artist.classList.toggle('bad', Boolean(pl.error));
+    const fromList = mine && session.count > 1 && session.source?.name;
+    f.fromLabel.textContent = fromList ? 'Sonando de' : 'Sonando';
+    f.from.textContent = fromList || '';
+    f.count.textContent = mine && session.count > 1 ? `${session.index + 1} de ${session.count}` : '';
+    for (const part of [m, f]) {
+        part.playIcon.replaceChildren(icon(playing ? 'pause' : 'play', 'f'));
+        part.play.title = playing ? 'Pausar' : 'Reproducir';
+        part.play.classList.toggle('loading', playing && pl.loading);
+    }
+    f.shuffle.classList.toggle('on', Boolean(session?.shuffle));
+    f.repeat.classList.toggle('on', Boolean(session) && session.repeat !== 'off');
+    f.repeat.classList.toggle('rep1', session?.repeat === 'one');
+    for (const button of [f.shuffle, f.repeat, f.prev, f.next]) button.disabled = !session;
     updateProgress();
 }
 
@@ -873,13 +1125,21 @@ function updateProgress() {
     if (!b) return;
     const total = duration();
     const at = pl.key ? (pl.pendingSeek > 0 ? pl.pendingSeek : audio.currentTime) : 0;
+    const width = total > 0 ? `${Math.min(100, (at / total) * 100)}%` : '0%';
     b.cur.textContent = fmt(at);
     b.dur.textContent = fmt(total);
-    b.fill.style.width = total > 0 ? `${Math.min(100, (at / total) * 100)}%` : '0%';
+    b.fill.style.width = width;
+    ui.mini.fill.style.width = width;
+    const f = ui.full;
+    f.dur.textContent = fmt(total);
+    if (!f.seeking) {       // mientras se arrastra la barra, manda el dedo
+        f.cur.textContent = fmt(at);
+        f.fill.style.width = width;
+    }
 }
 
 function markPlaying() {
-    for (const row of document.querySelectorAll('tr[data-key]')) row.classList.toggle('on', row.dataset.key === pl.key);
+    for (const row of document.querySelectorAll('tr[data-key], .row[data-key]')) row.classList.toggle('on', row.dataset.key === pl.key);
 }
 
 function renderSide() {
@@ -889,6 +1149,8 @@ function renderSide() {
         h('div.brand', null, h('b'), 'MyMusic'),
         h('button.nav', { type: 'button', class: view.name === 'home' || view.name === 'history' ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
         h('button.nav', { type: 'button', class: view.name === 'search' ? 'on' : '', onclick: () => go({ name: 'search' }) }, icon('search'), 'Buscar'),
+        // En pantalla estrecha no hay barra lateral: las listas son la tercera pestaña
+        h('button.nav.only-m', { type: 'button', class: view.name === 'lists' || view.name === 'list' ? 'on' : '', onclick: () => go({ name: 'lists' }) }, icon('lib'), 'Listas'),
         h('h4', null, 'Tus listas', h('button', { type: 'button', title: 'Nueva lista', onclick: () => run(createList, 'No se pudo crear la lista.') }, '+')),
         h('div.pls', null, st.lists.map(list => h('button.pl', {
             type: 'button', class: view.name === 'list' && view.id === list.id ? 'on' : '', onclick: () => go({ name: 'list', id: list.id }),
@@ -909,9 +1171,10 @@ async function createList() {
 
 /**
  * @param {object[]} tracks
- * @param {object} o  head: títulos de columna · number · platform · menu · play(track) · listId · onMove(key, toIndex)
+ * @param {object} o  head: títulos de columna · number · platform · badge · menu · play(track) · listId · onMove(key, toIndex)
  */
 function trackTable(tracks, o) {
+    if (mobile()) return trackRows(tracks, o);
     const head = o.head && h('thead', null, h('tr', null,
         o.number && h('th.n', null, '#'), h('th', null, 'Título'), h('th.a', null, 'Artista'),
         o.platform && h('th.p'), h('th.r', null, 'Duración'), o.menu && h('th.m')));
@@ -953,24 +1216,88 @@ function trackTable(tracks, o) {
     return h('table', null, head, h('tbody', null, rows));
 }
 
+/**
+ * Las mismas canciones en pantalla estrecha: filas como las de la app. Tocar una la reproduce, los tres
+ * puntos abren su menú y, donde se puede ordenar, se mantiene pulsada la fila para moverla.
+ */
+function trackRows(tracks, o) {
+    const rows = tracks.map((track, index) => {
+        const play = () => o.play(track);
+        return h('div.row', { data: { key: track.key }, class: track.key === pl.key ? 'on' : '', onclick: () => run(play, 'No se pudo reproducir. Prueba otra vez.') },
+            o.number ? h('span.n', null, String(index + 1)) : cover(track.thumb, 's40', track.key),
+            h('div.t', null,
+                h('b', null, track.title),
+                h('small', null,
+                    [track.artist, track.durationSec ? fmt(track.durationSec) : null].filter(Boolean).join(' · '),
+                    o.badge && badge(track.platform),
+                    o.platform && track.match === 'auto' ? h('span.auto', null, '≈ automática') : null)),
+            h('button.ib', { type: 'button', title: 'Más', onclick: event => {
+                event.stopPropagation();
+                openMenu(0, 0, trackMenu(track, { listId: o.listId, play }), track);
+            } }, icon('more', 'f')));
+    });
+    const box = h('div.rows', null, rows);
+    if (o.onMove) touchReorder(box, { onMove: (from, to) => o.onMove(tracks[from].key, to) });
+    return box;
+}
+
 // ---------------------------------------------------------------- pantallas
 
-function go(view) {
+function sameView(a, b) {
+    return a?.name === b?.name && (a?.id ?? null) === (b?.id ?? null);
+}
+
+/** Cambia de pantalla. Cada cambio queda en el historial del navegador, para que «atrás» vuelva a la anterior. */
+function go(view, { push = true } = {}) {
     closeAllOverlays();
+    if (push && !sameView(view, st.view)) {
+        try { history.pushState({ view }, ''); } catch { /* sin historial: no pasa nada */ }
+    }
     st.view = view;
     renderSide();
     renderMain();
     if (view.name === 'home') Promise.all([refreshLists(), refreshSession(), refreshRecent()]).then(() => st.view === view && renderMain()).catch(() => {});
+    if (view.name === 'lists') refreshLists().then(() => st.view === view && renderMain()).catch(() => {});
     if (view.name === 'list') loadList(view.id).catch(() => toast('No se pudo abrir la lista.'));
     if (view.name === 'history') loadHistory().catch(() => toast('No se pudo leer el historial.'));
 }
+
+// «Atrás» del navegador (en el móvil, el gesto o el botón): cierra lo que haya abierto encima y, si no hay nada, vuelve a la pantalla anterior
+window.addEventListener('popstate', event => {
+    if (!ui) return;
+    const queueOver = st.queue.open && mobile();
+    if (menuEl || modals.length || queueOver || st.full) {
+        if (!closeMenu()) {
+            if (modals.length) modals[modals.length - 1].close();
+            else if (queueOver) toggleQueue();
+            else closeFull();
+        }
+        try { history.pushState({ view: st.view }, ''); } catch { /* sin historial */ }
+        return;
+    }
+    go(event.state?.view ?? { name: 'home' }, { push: false });
+});
+
+// Al girar el móvil o cambiar el ancho de la ventana se pasa de una estructura a la otra
+narrow.addEventListener?.('change', () => {
+    document.documentElement.classList.toggle('m', mobile());
+    if (!ui) return;
+    closeAllOverlays();
+    if (!mobile()) closeFull();
+    renderSide();
+    ui.shown = null;
+    ui.main.replaceChildren();
+    renderMain();
+    renderQueue();
+    updateBar();
+});
 
 function renderMain() {
     if (!ui) return;
     const id = `${st.view.name}:${st.view.id ?? ''}`;
     const scroll = ui.shown === id ? ui.main.scrollTop : 0;
     ui.shown = id;
-    const build = { home: viewHome, search: viewSearch, list: viewList, history: viewHistory }[st.view.name];
+    const build = { home: viewHome, search: viewSearch, lists: viewLists, list: viewList, history: viewHistory }[st.view.name] ?? viewHome;
     if (st.view.name === 'search' && ui.main.querySelector('.searchbox')) return renderSearchResults();     // sin tocar lo que se está escribiendo
     ui.main.replaceChildren(...build().flat(Infinity).filter(Boolean));
     ui.main.scrollTop = scroll;
@@ -983,14 +1310,14 @@ function viewHome() {
     const current = session?.window?.current;
     const offer = current && (!pl.key || pl.displaced || session.active === false);
     return [
-        h('h3', null, 'Inicio'),
+        h('div.top', null, h('h3', null, 'Inicio'), h('button.ib.only-m', { type: 'button', title: 'Ajustes', onclick: openSettings }, icon('set'))),
         offer && h('div.banner', null,
             cover(current.track.thumb, 's44', current.track.key),
             h('div.tx', null,
                 h('b', null, `Continuar: ${session.source?.name ?? current.track.title}`),
                 h('div.mut', null, [`Canción ${current.index + 1} de ${session.count}`, fmt((session.positionMs ?? 0) / 1000),
                     session.active === false && session.deviceName ? `estaba sonando en ${session.deviceName}` : null].filter(Boolean).join(' · '))),
-            h('button.btn.pri', { type: 'button', onclick: resume }, icon('play', 'f sm'), 'Continuar aquí')),
+            h('button.btn.pri', { type: 'button', title: 'Continuar aquí', onclick: resume }, icon('play', 'f sm'), h('span.lbl', null, 'Continuar aquí'))),
         st.lists.length > 0 && [
             h('div.sec', null, 'Tus listas'),
             h('div.cards', null, st.lists.map(list => h('button.card', { type: 'button', onclick: () => go({ name: 'list', id: list.id }) },
@@ -1006,7 +1333,7 @@ function viewHome() {
 
 // Pantalla 4: Buscar
 function viewSearch() {
-    const input = h('input', { type: 'search', placeholder: 'Canción, artista o enlace', value: st.search.query, autocomplete: 'off', spellcheck: false,
+    const input = h('input', { type: 'search', placeholder: 'Canción, artista o enlace', value: st.search.query, autocomplete: 'off', autocapitalize: 'none', autocorrect: 'off', enterkeyhint: 'search', spellcheck: false,
         oninput: event => { st.search.query = event.target.value; },
         onkeydown: event => { if (event.key === 'Enter') doSearch(); } });
     input.addEventListener('paste', () => setTimeout(() => { st.search.query = input.value; if (/^https?:\/\//i.test(input.value.trim())) doSearch(); }, 0));
@@ -1025,7 +1352,7 @@ function searchResults() {
     if (s.hint === 'bad_link') return h('p.empty', null, 'No reconozco ese enlace.');
     if (!s.results) return null;
     if (s.results.length === 0) return h('p.empty', null, 'Sin resultados.');
-    return trackTable(s.results, { head: true, menu: true, play: playTrack });
+    return trackTable(s.results, { head: true, menu: true, badge: true, play: playTrack });
 }
 function renderSearchResults() {
     ui?.main.querySelector('.results')?.replaceChildren(...[searchResults()].filter(Boolean));
@@ -1035,6 +1362,7 @@ async function doSearch() {
     if (!query) return;
     const s = st.search;
     Object.assign(s, { busy: true, error: null, hint: null });
+    if (mobile()) document.activeElement?.blur?.();       // se guarda el teclado para que se vean los resultados
     renderSearchResults();
     try {
         const reply = await api('GET', `/search?q=${enc(query)}`, undefined, 60000);
@@ -1053,12 +1381,55 @@ async function loadList(id) {
     st.list = list;
     renderMain();
 }
+/** Opciones de una lista: cambiarle el nombre o mandarla a la papelera. */
+function listMenu(summary) {
+    return [
+        { label: 'Cambiar el nombre', run: async () => {
+            const name = await askName('Cambiar el nombre', summary.name);
+            if (!name || name === summary.name) return;
+            await api('PUT', `/lists/${summary.id}`, { name });
+            await Promise.all([refreshLists(), st.view.name === 'list' ? loadList(summary.id) : null]);
+            if (st.view.name === 'lists') renderMain();
+        } },
+        { label: 'Enviar a la papelera', danger: true, run: async () => {
+            if (!await confirmDialog(`¿Enviar «${summary.name}» a la papelera?`, 'La lista deja de verse aquí y en el móvil. No se borra: queda guardada en la papelera del servidor.', 'Enviar a la papelera')) return;
+            await api('DELETE', `/lists/${summary.id}`);
+            toast('Lista enviada a la papelera');
+            await refreshLists();
+            go({ name: mobile() ? 'lists' : 'home' });
+        } },
+    ];
+}
+
+// Pestaña «Listas» (pantalla estrecha; en el escritorio las listas están en la barra lateral). Pantalla 5 de la maqueta de la app
+function viewLists() {
+    return [
+        h('div.top', null, h('h3', null, 'Listas')),
+        st.lists.length === 0 ? h('p.empty', null, 'Todavía no tienes listas. Crea la primera con «Nueva lista».')
+            : h('div.rows', null, st.lists.map(list => h('div.row', { onclick: () => go({ name: 'list', id: list.id }) },
+                cover(list.thumb, 's48', list.id),
+                h('div.t', null, h('b', null, list.name),
+                    h('small', null, [songs(list.count), list.durationSec ? fmtTotal(list.durationSec) : null].filter(Boolean).join(' · '))),
+                h('button.ib', { type: 'button', title: 'Más', onclick: event => { event.stopPropagation(); openMenu(0, 0, listMenu(list)); } }, icon('more', 'f'))))),
+        h('div.fabspace'),
+        h('button.fab', { type: 'button', onclick: () => run(createList, 'No se pudo crear la lista.') }, icon('plus'), 'Nueva lista'),
+    ];
+}
+
 function viewList() {
     const list = st.list?.id === st.view.id ? st.list : null;
     const summary = list ?? st.lists.find(item => item.id === st.view.id);
     if (!summary) return [h('p.empty', null, 'Cargando…')];
     const start = (key, shuffle) => run(() => playList(summary.id, key, shuffle), 'No se pudo reproducir. Prueba otra vez.');
+    const more = event => {
+        const box = event.currentTarget.getBoundingClientRect();
+        openMenu(box.left, box.bottom + 4, listMenu(summary));
+    };
     return [
+        h('div.top.only-m', null,
+            h('button.ib', { type: 'button', title: 'Volver a Listas', onclick: () => go({ name: 'lists' }) }, icon('back')),
+            h('span.grow'),
+            h('button.ib', { type: 'button', title: 'Más', onclick: more }, icon('more', 'f'))),
         h('div.listhead', null,
             cover(summary.thumb, 's110', summary.id),
             h('div.info', null,
@@ -1067,26 +1438,9 @@ function viewList() {
                 h('div.mut', null, [songs(summary.count), summary.durationSec ? fmtTotal(summary.durationSec) : null].filter(Boolean).join(' · ')),
                 h('div.acts', null,
                     h('button.btn.pri', { type: 'button', disabled: summary.count === 0, onclick: () => start(null, false) }, icon('play', 'f sm'), 'Reproducir'),
-                    h('button.btn', { type: 'button', disabled: summary.count === 0, onclick: () => start(null, true) }, icon('shuffle', 'sm'), 'Aleatorio'),
+                    h('button.btn', { type: 'button', title: 'Aleatorio', disabled: summary.count === 0, onclick: () => start(null, true) }, icon('shuffle', 'sm'), h('span.only-d', null, 'Aleatorio')),
                     h('button.btn', { type: 'button', onclick: () => openImport(summary) }, icon('import', 'sm'), 'Importar'),
-                    h('button.btn.icon', { type: 'button', title: 'Más', onclick: event => {
-                        const box = event.currentTarget.getBoundingClientRect();
-                        openMenu(box.left, box.bottom + 4, [
-                            { label: 'Cambiar el nombre', run: async () => {
-                                const name = await askName('Cambiar el nombre', summary.name);
-                                if (!name || name === summary.name) return;
-                                await api('PUT', `/lists/${summary.id}`, { name });
-                                await Promise.all([refreshLists(), loadList(summary.id)]);
-                            } },
-                            { label: 'Enviar a la papelera', danger: true, run: async () => {
-                                if (!await confirmDialog(`¿Enviar «${summary.name}» a la papelera?`, 'La lista deja de verse aquí y en el móvil. No se borra: queda guardada en la papelera del servidor.', 'Enviar a la papelera')) return;
-                                await api('DELETE', `/lists/${summary.id}`);
-                                toast('Lista enviada a la papelera');
-                                await refreshLists();
-                                go({ name: 'home' });
-                            } },
-                        ]);
-                    } }, icon('more', 'f'))))),
+                    h('button.btn.icon.only-d', { type: 'button', title: 'Más', onclick: more }, icon('more', 'f'))))),
         !list ? h('p.empty', null, 'Cargando…')
             : list.tracks.length === 0 ? h('p.empty', null, 'Esta lista está vacía. Añade canciones desde Buscar o con «Importar».')
                 : trackTable(list.tracks, {
@@ -1108,7 +1462,7 @@ async function loadHistory() {
 }
 function viewHistory() {
     return [
-        h('h3', null, 'Historial'),
+        h('div.top', null, h('button.ib.only-m', { type: 'button', title: 'Volver a Inicio', onclick: () => go({ name: 'home' }) }, icon('back')), h('h3', null, 'Historial')),
         st.history.length === 0 ? h('p.empty', null, 'Todavía no hay nada escuchado.') : trackTable(st.history, { head: true, menu: true, play: playTrack }),
     ];
 }
@@ -1134,12 +1488,17 @@ function renderQueue() {
         updateBar();
         await refreshQueue();
     });
+    const touch = mobile();     // en pantalla estrecha: tocar una fila salta a ella y se reordena arrastrando el asa
     const rows = st.queue.entries.map(entry => {
-        const row = h('div.qrow', { draggable: true, ondblclick: () => gotoKey(entry.track.key) },
+        const row = h('div.qrow', { draggable: !touch, ondblclick: () => !touch && gotoKey(entry.track.key), onclick: () => touch && gotoKey(entry.track.key) },
             cover(entry.track.thumb, 's34', entry.track.key),
             h('div.tx', null, h('b', null, entry.track.title), h('small', null, entry.track.artist ?? '')),
             h('span.grip', { title: 'Arrastra para reordenar' }, icon('drag')),
-            h('button.ib.x', { type: 'button', title: 'Quitar de la cola', onclick: () => change(() => api('DELETE', `/session/queue/${enc(entry.track.key)}`)) }, icon('close')));
+            h('button.ib.x', { type: 'button', title: 'Quitar de la cola', onclick: event => {
+                event.stopPropagation();
+                change(() => api('DELETE', `/session/queue/${enc(entry.track.key)}`));
+            } }, icon('close')));
+        if (touch) return row;
         row.addEventListener('dragstart', event => {
             dragging = entry;
             row.classList.add('dragging');
@@ -1158,14 +1517,21 @@ function renderQueue() {
         return row;
     });
     const shownUpTo = (session?.index ?? 0) + st.queue.entries.length + 1;
+    const list = h('div.qrows', null, rows);
+    if (touch) {
+        const entries = st.queue.entries;
+        touchReorder(list, { handle: '.grip', onMove: (from, to) => change(() => api('POST', '/session/queue/move', { key: entries[from].track.key, to: entries[to].index })) });
+    }
     const parts = [
-        h('div.head', null, 'Cola', h('button.ib', { type: 'button', title: 'Cerrar', onclick: toggleQueue }, icon('close'))),
+        touch
+            ? h('div.head', null, h('button.ib', { type: 'button', title: 'Cerrar', onclick: toggleQueue }, icon('down')), h('span.mid', null, 'Cola'), h('span.sp'))
+            : h('div.head', null, 'Cola', h('button.ib', { type: 'button', title: 'Cerrar', onclick: toggleQueue }, icon('close'))),
         !current ? h('p.empty', null, 'No hay nada en la cola.') : [
             h('div.sec', null, 'Sonando'),
             h('div.qrow.cur', null, cover(current.track.thumb, 's34', current.track.key),
                 h('div.tx', null, h('b', null, current.track.title), h('small', null, current.track.artist ?? ''))),
             h('div.sec', null, `A continuación · ${session.source?.name ?? ''}`),
-            rows.length === 0 ? h('p.empty', null, 'No hay más canciones después de esta.') : rows,
+            rows.length === 0 ? h('p.empty', null, 'No hay más canciones después de esta.') : list,
             shownUpTo < st.queue.count && h('button.btn', { type: 'button', onclick: () => { st.queue.limit += 30; refreshQueue(); } }, 'Ver más'),
         ],
     ];
@@ -1195,7 +1561,8 @@ function showLogin(message = null) {
     Object.assign(st, { user: null, lists: [], session: null, recent: [], history: [], list: null, view: { name: 'home' } });
     Object.assign(st.search, { query: '', results: null, hint: null, busy: false, error: null });
     st.queue.open = false;
-    const user = h('input.in', { type: 'text', name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: false, maxLength: 30 });
+    st.full = false;
+    const user = h('input.in', { type: 'text', name: 'username', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: false, maxLength: 30 });
     const password = h('input.in', { type: 'password', name: 'password', autocomplete: 'current-password' });
     const error = h('div', null, message && h('p.err', null, message));
     const submit = h('button.btn.pri.wide', { type: 'submit' }, 'Entrar');
