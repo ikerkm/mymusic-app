@@ -8,13 +8,15 @@ const num = (v, def) => (v !== undefined && v !== '' && Number.isFinite(Number(v
 // antes de que index.js cargue el .env (lección del bot, 2026-09-18).
 export const config = {
     get root() { return ROOT; },
-    get version() { return '0.1.0'; },
+    get version() { return '0.2.0'; },
     get dataDir() { return process.env.MYMUSIC_DATA || join(ROOT, 'data'); },
     get host() { return process.env.MYMUSIC_HOST || '127.0.0.1'; },
     get port() { return num(process.env.MYMUSIC_PORT, 3100); },
     // Tope de audio en memoria (todas las canciones) y tope por canción, en bytes
     get cacheMaxBytes() { return num(process.env.MYMUSIC_CACHE_MB, 300) * 1024 * 1024; },
     get trackMaxBytes() { return num(process.env.MYMUSIC_TRACK_MAX_MB, 150) * 1024 * 1024; },
+    // Cuánto esperar en una canción antes de preparar la siguiente (evita extraer de más al saltar deprisa)
+    get prefetchDelayMs() { return num(process.env.MYMUSIC_PREFETCH_DELAY_MS, 8000); },
     get ytdlpPython() { return process.env.YTDLP_PYTHON || (process.platform === 'win32' ? 'py' : 'python3'); },
     get ytdlpJsRuntime() { return process.env.YTDLP_JS_RUNTIME || ''; },
     get ytdlpPlayerClient() { return process.env.YTDLP_PLAYER_CLIENT || ''; },

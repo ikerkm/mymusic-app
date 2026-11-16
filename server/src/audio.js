@@ -108,12 +108,18 @@ export class AudioCache {
      * @param {number} o.trackMaxBytes  tope por canción; por encima falla con code 'too_big'
      * @param {(url: string) => {stdout, meta, done, kill}} o.open  fuente de audio (yt-dlp, o un doble en los tests)
      */
-    constructor({ maxBytes, trackMaxBytes, open, log = () => {} }) {
+    constructor({ maxBytes, trackMaxBytes, open, attempts = 2, log = () => {} }) {
         this.maxBytes = maxBytes;
         this.trackMaxBytes = trackMaxBytes;
         this.open = open;
+        // YouTube rechaza alguna extracción a ratos y la siguiente sale bien (visto en el bot y aquí):
+        // si yt-dlp no da audio, se vuelve a intentar antes de dar la canción por fallida.
+        this.attempts = attempts;
         this.log = log;
         this.items = new Map();
+        // Claves que no se sueltan de la memoria aunque nadie las esté leyendo en este instante:
+        // la canción que suena (el reproductor puede reconectar a mitad) y la siguiente, ya preparada.
+        this.pinned = new Set();
     }
 
     get bytes() {
@@ -139,7 +145,7 @@ export class AudioCache {
         if (this.items.get(buffer.key) === buffer) this.items.delete(buffer.key);
     }
 
-    #fill(buffer, url) {
+    #fill(buffer, url, attempt = 1) {
         const started = Date.now();
         let source;
         try {
@@ -174,13 +180,22 @@ export class AudioCache {
         source.done.then(({ code, stderr }) => {
             if (buffer.done) return;
             if (buffer.size === 0) {
+                const reason = String(stderr).split('\n').filter(Boolean).pop()?.slice(0, 200) ?? 'sin mensaje';
+                const after = `a los ${((Date.now() - started) / 1000).toFixed(1)} s (código ${code})`;
+                if (attempt < this.attempts) {
+                    // Quien esté esperando esta canción sigue esperando: no se entera del primer fallo
+                    this.log(`[audio] ${buffer.key}: intento ${attempt} fallido ${after}: ${reason} — se reintenta`);
+                    return this.#fill(buffer, url, attempt + 1);
+                }
                 const error = new Error(stderr || 'yt-dlp no produjo audio');
                 error.code = 'extract_failed';
                 buffer.fail(error);
                 this.#drop(buffer);
+                this.log(`[audio] ${buffer.key}: FALLÓ ${after}: ${reason}`);
             } else if (code !== 0 && buffer.declared !== null && buffer.size < buffer.declared) {
                 buffer.fail(new Error('La descarga se cortó a medias'));
                 this.#drop(buffer);
+                this.log(`[audio] ${buffer.key}: descarga cortada a medias (${buffer.size} de ${buffer.declared} bytes, código ${code})`);
             } else {
                 buffer.finish();
                 this.log(`[audio] ${buffer.key}: completa, ${(buffer.size / 1048576).toFixed(1)} MB en ${((Date.now() - started) / 1000).toFixed(1)} s`);
@@ -194,7 +209,7 @@ export class AudioCache {
         let total = this.bytes;
         if (total <= this.maxBytes) return;
         const idle = [...this.items.values()]
-            .filter(item => item.done && item.readers === 0)
+            .filter(item => item.done && item.readers === 0 && !this.pinned.has(item.key))
             .sort((a, b) => a.lastUsed - b.lastUsed);
         for (const item of idle) {
             if (total <= this.maxBytes) break;

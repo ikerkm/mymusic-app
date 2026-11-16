@@ -1,6 +1,7 @@
 import express from 'express';
 import { once } from 'node:events';
 import { sniffMime } from './audio.js';
+import { ListStore, cleanTrack } from './lists.js';
 import { parseKey } from './sources.js';
 import { explain } from './ytdlp.js';
 
@@ -33,7 +34,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, lists, sessions, history, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -144,6 +145,174 @@ export function createApp({ auth, cache, search, open, version = '0', log = () =
         }
     });
 
+    // ------------------------------------------------------------------ Fase 2: listas, sesión, historial
+    const priv = express.Router();
+    priv.use(requireAuth);
+    const int = value => (/^\d+$/.test(String(value ?? '')) ? Number(value) : undefined);
+
+    // --- Listas ---
+    const listOr404 = (req, res) => {
+        const list = lists.get(req.params.id);
+        if (!list) res.status(404).json({ error: 'list_not_found' });
+        return list;
+    };
+
+    priv.get('/lists', (req, res) => res.json({ lists: lists.all() }));
+
+    priv.post('/lists', (req, res) => {
+        const list = lists.create(req.body?.name);
+        if (!list) return res.status(400).json({ error: 'bad_name' });
+        res.status(201).json({ list: ListStore.summary(list) });
+    });
+
+    priv.get('/lists/:id', (req, res) => {
+        const list = listOr404(req, res);
+        if (list) res.json({ list: { ...ListStore.summary(list), tracks: list.tracks } });
+    });
+
+    const renameList = (req, res) => {
+        if (!listOr404(req, res)) return;
+        const list = lists.rename(req.params.id, req.body?.name);
+        if (!list) return res.status(400).json({ error: 'bad_name' });
+        res.json({ list: ListStore.summary(list) });
+    };
+    priv.patch('/lists/:id', renameList);
+    priv.put('/lists/:id', renameList);      // alias de PATCH, por lo mismo que en /session
+
+    priv.delete('/lists/:id', (req, res) => {
+        if (!listOr404(req, res)) return;
+        lists.remove(req.params.id);
+        res.json({ ok: true });
+    });
+
+    priv.post('/lists/:id/tracks', (req, res) => {
+        if (!listOr404(req, res)) return;
+        const track = cleanTrack(req.body?.track);
+        if (!track) return res.status(400).json({ error: 'bad_track' });
+        const { added, list } = lists.addTracks(req.params.id, [track]);
+        res.json({ added, list: ListStore.summary(list) });
+    });
+
+    priv.delete('/lists/:id/tracks/:key', (req, res) => {
+        if (!listOr404(req, res)) return;
+        const list = lists.removeTrack(req.params.id, req.params.key);
+        if (!list) return res.status(404).json({ error: 'track_not_found' });
+        res.json({ list: ListStore.summary(list) });
+    });
+
+    priv.post('/lists/:id/move', (req, res) => {
+        if (!listOr404(req, res)) return;
+        const list = lists.moveTrack(req.params.id, req.body?.key, req.body?.toIndex);
+        if (!list) return res.status(400).json({ error: 'bad_move' });
+        res.json({ list: ListStore.summary(list) });
+    });
+
+    // --- Sesión de escucha ---
+    // Tras cada cambio: la canción actual y la siguiente quedan fijadas en memoria, y la siguiente se
+    // prepara si el usuario se queda unos segundos en la actual.
+    let prefetchTimer = null;
+    function syncAudio({ prefetch = true } = {}) {
+        const view = sessions.view();
+        const nextKey = view?.window.next?.track.key ?? null;
+        cache.pinned = new Set([view?.window.current?.track.key, nextKey].filter(Boolean));
+        clearTimeout(prefetchTimer);
+        if (!prefetch || !nextKey) return;
+        prefetchTimer = setTimeout(() => {
+            const source = parseKey(nextKey);
+            if (!source || sessions.view()?.window.next?.track.key !== nextKey) return;
+            const known = cache.items.has(source.key);
+            cache.get(source.key, source.url);
+            if (!known) log(`[sesion] preparando la siguiente: ${source.key}`);
+        }, prefetchDelayMs);
+        prefetchTimer.unref();
+    }
+    syncAudio({ prefetch: false });      // al arrancar: fijar lo que hubiera, sin extraer nada
+
+    const reply = (res, view, error = 'no_session') => {
+        if (!view) return res.status(sessions.active ? 400 : 404).json({ error: sessions.active ? error : 'no_session' });
+        syncAudio();
+        res.json({ session: view });
+    };
+
+    priv.get('/session', (req, res) => res.json({ session: sessions.view() }));
+
+    priv.post('/session', (req, res) => {
+        const body = req.body ?? {};
+        if (body.listId !== undefined) {
+            const list = lists.get(body.listId);
+            if (!list) return res.status(404).json({ error: 'list_not_found' });
+            if (list.tracks.length === 0) return res.status(400).json({ error: 'empty_list' });
+            return reply(res, sessions.start({
+                source: { type: 'list', id: list.id, name: list.name },
+                tracks: list.tracks,
+                startKey: typeof body.startKey === 'string' ? body.startKey : null,
+                shuffle: body.shuffle === true,
+            }));
+        }
+        const track = cleanTrack(body.track);
+        if (!track) return res.status(400).json({ error: 'bad_track' });
+        reply(res, sessions.start({ source: { type: 'search', name: 'Búsqueda' }, tracks: [track] }));
+    });
+
+    // La canción se puede señalar por posición o por clave. La app usa la clave: las posiciones
+    // se mueven cuando se toca la cola, las claves no.
+    const indexFrom = body => (Number.isInteger(body?.index) ? body.index : sessions.indexOf(body?.key));
+
+    priv.post('/session/goto', (req, res) => reply(res, sessions.goto(indexFrom(req.body)), 'bad_index'));
+
+    const setOptions = (req, res) => reply(res, sessions.setOptions(req.body ?? {}));
+    priv.patch('/session', setOptions);
+    priv.put('/session', setOptions);        // alias: el cliente HTTP de Android no admite PATCH en todas las versiones
+
+    priv.put('/session/state', (req, res) => {
+        const result = sessions.report({ index: indexFrom(req.body), positionMs: Number(req.body?.positionMs) });
+        if (result?.played) history.append(result.played);
+        res.json({ ok: Boolean(result) });
+    });
+
+    priv.get('/session/queue', (req, res) => {
+        const queue = sessions.queue(int(req.query.from), int(req.query.limit));
+        if (!queue) return res.status(404).json({ error: 'no_session' });
+        res.json(queue);
+    });
+
+    priv.post('/session/queue', (req, res) => {
+        const track = cleanTrack(req.body?.track);
+        if (!track) return res.status(400).json({ error: 'bad_track' });
+        // Sin sesión abierta, «a continuación» o «añadir a la cola» equivale a reproducir
+        if (!sessions.active) return reply(res, sessions.start({ source: { type: 'search', name: 'Búsqueda' }, tracks: [track] }));
+        reply(res, sessions.enqueue(track, req.body?.mode === 'next' ? 'next' : 'end'));
+    });
+
+    // Mover y quitar también se piden por clave. Por clave, una orden repetida no hace daño:
+    // por posición, una segunda orden idéntica quitaría la canción que ha ocupado ese hueco.
+    priv.post('/session/queue/move', (req, res) => {
+        const from = Number.isInteger(req.body?.from) ? req.body.from : sessions.indexOf(req.body?.key);
+        reply(res, sessions.moveQueued(from, req.body?.to), 'bad_move');
+    });
+
+    priv.delete('/session/queue/:ref', (req, res) => {
+        const byIndex = int(req.params.ref);
+        if (byIndex !== undefined) return reply(res, sessions.removeQueued(byIndex), 'bad_index');
+        const index = sessions.indexOf(req.params.ref);
+        // Si la canción ya no está en la cola (orden repetida), no pasa nada: se devuelve la sesión tal cual
+        if (index === null) return reply(res, sessions.view());
+        log(`[sesion] quitar de la cola: ${req.params.ref}`);
+        reply(res, sessions.removeQueued(index), 'bad_index');
+    });
+
+    // --- Historial ---
+    priv.get('/history', (req, res) => {
+        const limit = Math.min(int(req.query.limit) ?? 30, 200);
+        let entries = history.recent(req.query.distinct ? limit * 4 : limit);
+        if (req.query.distinct) {
+            const seen = new Set();
+            entries = entries.filter(e => !seen.has(e.track.key) && seen.add(e.track.key)).slice(0, limit);
+        }
+        res.json({ entries });
+    });
+
+    app.use('/api', priv);
     app.use('/api', (req, res) => res.status(404).json({ error: 'not_found' }));
     app.use((req, res) => res.status(404).end());
     // Errores no previstos (p. ej. JSON mal formado): respuesta corta, sin trazas

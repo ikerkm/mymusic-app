@@ -18,8 +18,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,27 +31,37 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
 import androidx.compose.ui.unit.sp
+import com.mymusic.app.AppViewModel
+import com.mymusic.app.Overlay
+import com.mymusic.app.SheetTarget
 import com.mymusic.app.playback.PlayerState
 
-// Controles que la maqueta enseña pero que dependen de la cola (Fase 2): se ven, apagados
+/** Botón de icono del reproductor. Apagado se ve atenuado y no responde. */
 @Composable
-private fun Later(icon: ImageVector, size: Int = 24) {
-    Icon(icon, contentDescription = null, tint = Mm.Tx, modifier = Modifier.size(size.dp).alpha(0.3f))
+private fun Control(icon: ImageVector, label: String, tag: String, tint: Color = Mm.Tx, enabled: Boolean = true, size: Int = 24, onClick: () -> Unit) {
+    Box(
+        Modifier.size(44.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onClick).alpha(if (enabled) 1f else 0.3f).testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(size.dp))
+    }
 }
 
 /** Pantalla 8 de la maqueta. Se abre tocando el minirreproductor. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlayerScreen(state: PlayerState, onClose: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit) {
+fun PlayerScreen(vm: AppViewModel, state: PlayerState) {
     val track = state.track ?: return
+    // La sesión del servidor, si habla de la canción que suena (puede ir un instante por detrás al cambiar)
+    val session = vm.session?.takeIf { it.current?.track?.key == track.key }
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs.coerceAtLeast(1)
     val fraction = dragging ?: (state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
@@ -65,12 +75,15 @@ fun PlayerScreen(state: PlayerState, onClose: () -> Unit, onToggle: () -> Unit, 
             .testTag("player"),
     ) {
         Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(MmIcons.Down, contentDescription = "Cerrar", tint = Mm.Tx, modifier = Modifier.size(24.dp).clickable(onClick = onClose))
+            Control(MmIcons.Down, "Cerrar", "playerClose") { vm.back() }
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Sonando de", color = Mm.Mut, fontSize = 11.sp)
-                Text("Búsqueda", color = Mm.Tx, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    vm.session?.sourceName?.takeIf { it.isNotBlank() } ?: "Búsqueda",
+                    color = Mm.Tx, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
             }
-            Later(MmIcons.More, 22)
+            Control(MmIcons.More, "Más opciones", "playerMenu", size = 22) { vm.sheet = SheetTarget(track) }
         }
 
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -88,8 +101,8 @@ fun PlayerScreen(state: PlayerState, onClose: () -> Unit, onToggle: () -> Unit, 
                     PlatformBadge(track.platform)
                 }
             }
-            Spacer(Modifier.width(10.dp))
-            Later(MmIcons.ListAdd)
+            Spacer(Modifier.width(6.dp))
+            Control(MmIcons.ListAdd, "Añadir a una lista", "playerAddToList") { vm.pickFor = track }
         }
 
         if (state.error != null) {
@@ -100,7 +113,7 @@ fun PlayerScreen(state: PlayerState, onClose: () -> Unit, onToggle: () -> Unit, 
             value = fraction,
             onValueChange = { dragging = it },
             onValueChangeFinished = {
-                dragging?.let { onSeek((it * duration).toLong()) }
+                dragging?.let { vm.player.seekTo((it * duration).toLong()) }
                 dragging = null
             },
             enabled = state.durationMs > 0,
@@ -119,14 +132,14 @@ fun PlayerScreen(state: PlayerState, onClose: () -> Unit, onToggle: () -> Unit, 
         }
 
         Row(
-            Modifier.fillMaxWidth().padding(top = 10.dp),
+            Modifier.fillMaxWidth().padding(top = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Later(MmIcons.Shuffle)
-            Later(MmIcons.Prev)
+            Control(MmIcons.Shuffle, "Aleatorio", "shuffle", tint = if (vm.session?.shuffle == true) Mm.Acc else Mm.Tx) { vm.toggleShuffle() }
+            Control(MmIcons.Prev, "Anterior", "prev") { vm.player.previous() }
             Box(
-                Modifier.size(64.dp).clip(CircleShape).background(Mm.Acc).clickable(onClick = onToggle).testTag("playPause"),
+                Modifier.size(64.dp).clip(CircleShape).background(Mm.Acc).clickable { vm.player.toggle() }.testTag("playPause"),
                 contentAlignment = Alignment.Center,
             ) {
                 if (state.isLoading && state.error == null) {
@@ -135,13 +148,18 @@ fun PlayerScreen(state: PlayerState, onClose: () -> Unit, onToggle: () -> Unit, 
                     Icon(if (state.wantsToPlay) MmIcons.Pause else MmIcons.Play, contentDescription = if (state.wantsToPlay) "Pausar" else "Reproducir", tint = Mm.OnAcc, modifier = Modifier.size(28.dp))
                 }
             }
-            Later(MmIcons.Next)
-            Later(MmIcons.Repeat)
+            Control(MmIcons.Next, "Siguiente", "next", enabled = state.hasNext) { vm.player.next() }
+            // Repetir: apagado → toda la lista → esta canción (con un «1»)
+            val repeat = vm.session?.repeat ?: "off"
+            Box(contentAlignment = Alignment.Center) {
+                Control(MmIcons.Repeat, "Repetir", "repeat", tint = if (repeat == "off") Mm.Tx else Mm.Acc) { vm.cycleRepeat() }
+                if (repeat == "one") Text("1", color = Mm.Acc, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            }
         }
 
-        Row(Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 20.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(
-                Modifier.clip(RoundedCornerShape(50)).background(Mm.Sur2).padding(horizontal = 14.dp, vertical = 9.dp).alpha(0.4f),
+                Modifier.clip(RoundedCornerShape(50)).background(Mm.Sur2).clickable { vm.open(Overlay.Queue) }.padding(horizontal = 14.dp, vertical = 9.dp).testTag("openQueue"),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(MmIcons.Queue, contentDescription = null, tint = Mm.Tx, modifier = Modifier.size(16.dp))
@@ -149,9 +167,12 @@ fun PlayerScreen(state: PlayerState, onClose: () -> Unit, onToggle: () -> Unit, 
                 Text("Cola", color = Mm.Tx, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.weight(1f))
-            if (state.isLoading && state.error == null && state.positionMs == 0L) {
-                Text("Preparando la canción…", color = Mm.Mut, fontSize = 12.sp, textAlign = TextAlign.End)
+            val status = when {
+                state.isLoading && state.error == null && state.positionMs == 0L -> "Preparando la canción…"
+                session?.current != null -> "${session.current.index + 1} de ${session.count}"
+                else -> ""
             }
+            Text(status, color = Mm.Mut, fontSize = 12.sp)
         }
     }
 }

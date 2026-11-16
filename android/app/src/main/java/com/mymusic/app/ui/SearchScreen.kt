@@ -23,15 +23,16 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mymusic.app.AppViewModel
+import com.mymusic.app.SheetTarget
 import com.mymusic.app.data.Track
 
 @Composable
@@ -54,14 +55,31 @@ fun SectionLabel(text: String) {
     )
 }
 
-/** Fila de canción: carátula, título, «artista · duración» con la etiqueta de plataforma, y el menú. */
+/**
+ * Fila de canción: carátula, título, «artista · duración» con la etiqueta de plataforma, y el menú.
+ * @param number  si se da, se muestra el número de orden en vez de la carátula (dentro de una lista)
+ * @param onMenu  abre el menú de la canción (pantalla 4 de la maqueta); null = sin menú
+ * @param trailing  contenido al final en lugar del menú (p. ej. el asa de arrastre en la cola)
+ */
 @Composable
-fun TrackRow(track: Track, playing: Boolean, onClick: () -> Unit) {
+fun TrackRow(
+    track: Track,
+    playing: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    number: Int? = null,
+    onMenu: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 7.dp),
+        modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Cover(track.thumb, 42.dp)
+        if (number != null) {
+            Text("$number", color = Mm.Mut, fontSize = 12.sp, textAlign = TextAlign.End, modifier = Modifier.width(26.dp))
+        } else {
+            Cover(track.thumb, 42.dp)
+        }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -79,8 +97,13 @@ fun TrackRow(track: Track, playing: Boolean, onClick: () -> Unit) {
                 PlatformBadge(track.platform)
             }
         }
-        // El menú de canción (pantalla 4 de la maqueta) llega en la Fase 2
-        Icon(MmIcons.More, contentDescription = null, tint = Mm.Mut, modifier = Modifier.padding(start = 8.dp).size(20.dp).alpha(0.35f))
+        if (trailing != null) {
+            trailing()
+        } else if (onMenu != null) {
+            Box(Modifier.size(40.dp).clickable(onClick = onMenu), contentAlignment = Alignment.Center) {
+                Icon(MmIcons.More, contentDescription = "Más opciones", tint = Mm.Mut, modifier = Modifier.size(20.dp))
+            }
+        }
     }
 }
 
@@ -123,10 +146,15 @@ fun SearchScreen(vm: AppViewModel, playingKey: String?, modifier: Modifier = Mod
                 SectionLabel("Resultados")
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(vm.results, key = { it.key }) { track ->
-                        TrackRow(track, playing = track.key == playingKey) {
-                            keyboard?.hide()
-                            vm.player.play(track)
-                        }
+                        TrackRow(
+                            track,
+                            playing = track.key == playingKey,
+                            onClick = {
+                                keyboard?.hide()
+                                vm.playTrack(track)
+                            },
+                            onMenu = { vm.sheet = SheetTarget(track) },
+                        )
                     }
                 }
             }

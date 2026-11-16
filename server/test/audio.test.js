@@ -61,13 +61,25 @@ test('la misma canción no se extrae dos veces', async () => {
     assert.equal(open.calls.length, 1);
 });
 
-test('si yt-dlp no da audio, falla con su mensaje y un reintento vuelve a extraer', async () => {
+test('si yt-dlp no da audio ni al segundo intento, falla con su mensaje; pedirla otra vez vuelve a extraer', async () => {
     const open = fakeOpen(Buffer.alloc(0), { filesize: null, stderr: 'ERROR: Video unavailable' });
     const cache = newCache(open);
     await assert.rejects(cache.get('yt:aaaaaaaaaaa', 'u').waitHeader(), /Video unavailable/);
+    assert.equal(open.calls.length, 2, 'dos intentos antes de rendirse');
     assert.equal(cache.items.size, 0);
     await assert.rejects(cache.get('yt:aaaaaaaaaaa', 'u').waitHeader());
+    assert.equal(open.calls.length, 4);
+});
+
+test('un rechazo pasajero se reintenta solo: quien espera la canción no se entera', async () => {
+    const bytes = fakeAudio(12_000);
+    const open = fakeOpen(bytes, { failFirst: 1 });
+    const cache = newCache(open);
+    const buffer = cache.get('yt:aaaaaaaaaaa', 'u');
+    await buffer.waitHeader();
+    assert.deepEqual(await collect(buffer.read(0, 11_999)), bytes);
     assert.equal(open.calls.length, 2);
+    assert.equal(buffer.error, null);
 });
 
 test('una descarga cortada a medias rompe la lectura en vez de entregar audio incompleto', async () => {

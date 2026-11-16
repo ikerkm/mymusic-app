@@ -4,6 +4,8 @@ import { config } from './config.js';
 import { Auth } from './auth.js';
 import { AudioCache } from './audio.js';
 import { createApp } from './app.js';
+import { ListStore } from './lists.js';
+import { HistoryStore, SessionStore } from './session.js';
 import { searchYoutube } from './sources.js';
 import { openAudio } from './ytdlp.js';
 
@@ -18,7 +20,18 @@ const cache = new AudioCache({
     open: openAudio,
     log,
 });
-const app = createApp({ auth, cache, search: searchYoutube, open: openAudio, version: config.version, log });
+const app = createApp({
+    auth,
+    cache,
+    search: searchYoutube,
+    open: openAudio,
+    lists: new ListStore(config.dataDir),
+    sessions: new SessionStore(config.dataDir),
+    history: new HistoryStore(config.dataDir),
+    prefetchDelayMs: config.prefetchDelayMs,
+    version: config.version,
+    log,
+});
 
 const server = app.listen(config.port, config.host, () => {
     log(`[mymusic] servidor ${config.version} en http://${config.host}:${config.port}`);

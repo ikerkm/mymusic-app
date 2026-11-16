@@ -3,6 +3,7 @@ package com.mymusic.app.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -36,7 +38,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mymusic.app.AppViewModel
+import com.mymusic.app.Overlay
 import com.mymusic.app.playback.PlayerState
+import kotlinx.coroutines.delay
 
 private enum class Tab(val label: String, val icon: ImageVector) {
     Home("Inicio", MmIcons.Home),
@@ -44,58 +48,92 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     Lists("Listas", MmIcons.Lists),
 }
 
-/** Estructura común de la maqueta: contenido, minirreproductor y las tres pestañas de abajo. */
+/**
+ * Estructura común de la maqueta: contenido, minirreproductor y las tres pestañas de abajo.
+ * El reproductor y la cola ocupan toda la pantalla; el interior de una lista y el historial
+ * se abren sobre las pestañas y conservan el minirreproductor.
+ */
 @Composable
 fun MainScreen(vm: AppViewModel) {
     val state by vm.player.state.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableStateOf(Tab.Search) }
-    var playerOpen by rememberSaveable { mutableStateOf(false) }
+    var tab by rememberSaveable { mutableStateOf(Tab.Home) }
+    val top = vm.overlays.lastOrNull()
 
-    if (playerOpen && state.track != null) {
-        BackHandler { playerOpen = false }
-        PlayerScreen(state, onClose = { playerOpen = false }, onToggle = vm.player::toggle, onSeek = vm.player::seekTo)
-        return
-    }
+    LaunchedEffect(Unit) { vm.refreshHome() }
+    BackHandler(enabled = top != null) { vm.back() }
 
-    Column(Modifier.fillMaxSize().background(Mm.Bg).statusBarsPadding()) {
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            when (tab) {
-                Tab.Search -> SearchScreen(vm, playingKey = state.track?.key)
-                Tab.Home -> ComingSoon("Inicio", "«Continuar», tus listas y lo escuchado hace poco llegan en la Fase 2.") {
-                    Icon(MmIcons.Settings, contentDescription = null, tint = Mm.Tx, modifier = Modifier.size(22.dp).alpha(0.35f))
+    Box(Modifier.fillMaxSize().background(Mm.Bg)) {
+        when {
+            top == Overlay.Player && state.track != null -> PlayerScreen(vm, state)
+            top == Overlay.Queue -> QueueScreen(vm)
+            else -> Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (top) {
+                        is Overlay.ListDetail -> ListDetailScreen(vm, top.id, state)
+                        Overlay.History -> HistoryScreen(vm, state)
+                        else -> when (tab) {
+                            Tab.Home -> HomeScreen(vm, state)
+                            Tab.Search -> SearchScreen(vm, playingKey = state.track?.key)
+                            Tab.Lists -> ListsScreen(vm)
+                        }
+                    }
                 }
-                Tab.Lists -> ComingSoon("Listas", "Tus listas llegan en la Fase 2.")
+                if (state.track != null) {
+                    MiniPlayer(state, onOpen = { vm.open(Overlay.Player) }, onToggle = vm.player::toggle, onNext = vm.player::next)
+                }
+                Row(Modifier.fillMaxWidth().background(Mm.Line).padding(top = 1.dp).background(Mm.Bg).navigationBarsPadding().height(56.dp)) {
+                    for (item in Tab.entries) {
+                        val color = if (item == tab && top == null) Mm.Acc else Mm.Mut
+                        Column(
+                            Modifier.weight(1f).fillMaxSize().clickable {
+                                vm.overlays.clear()
+                                tab = item
+                                if (item != Tab.Search) vm.refreshHome()
+                            }.testTag("tab${item.name}"),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Icon(item.icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.height(2.dp))
+                            Text(item.label, color = color, fontSize = 11.sp)
+                        }
+                    }
+                }
             }
         }
-        if (state.track != null) MiniPlayer(state, onOpen = { playerOpen = true }, onToggle = vm.player::toggle)
-        Row(Modifier.fillMaxWidth().background(Mm.Line).padding(top = 1.dp).background(Mm.Bg).navigationBarsPadding().height(56.dp)) {
-            for (item in Tab.entries) {
-                val color = if (item == tab) Mm.Acc else Mm.Mut
-                Column(
-                    Modifier.weight(1f).fillMaxSize().clickable { tab = item }.testTag("tab${item.name}"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
-                ) {
-                    Icon(item.icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.height(2.dp))
-                    Text(item.label, color = color, fontSize = 11.sp)
-                }
-            }
-        }
+
+        // Por encima de cualquier pantalla: el menú de canción, el selector de lista y los avisos
+        vm.sheet?.let { TrackSheet(vm, it) }
+        vm.pickFor?.let { ListPickerSheet(vm, it) }
+        Notice(vm, Modifier.align(Alignment.BottomCenter))
     }
 }
 
+/** Aviso breve («Añadida a breakcore») que se quita solo. */
 @Composable
-private fun ComingSoon(title: String, message: String, trailing: @Composable () -> Unit = {}) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        ScreenTitle(title, trailing = trailing)
-        Text(message, color = Mm.Mut, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+private fun Notice(vm: AppViewModel, modifier: Modifier) {
+    val text = vm.notice ?: return
+    LaunchedEffect(text) {
+        delay(2500)
+        if (vm.notice == text) vm.notice = null
     }
+    Text(
+        text,
+        color = Mm.Tx,
+        fontSize = 13.sp,
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(bottom = 132.dp, start = 24.dp, end = 24.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Mm.Sur2)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .testTag("notice"),
+    )
 }
 
 /** Barra fija sobre las pestañas con lo que suena; tocarla abre el reproductor. */
 @Composable
-private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit, onToggle: () -> Unit) {
+private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit, onToggle: () -> Unit, onNext: () -> Unit) {
     val track = state.track ?: return
     val fraction = if (state.durationMs > 0) (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f) else 0f
     Column(
@@ -107,7 +145,7 @@ private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit, onToggle: () -> U
             .clickable(onClick = onOpen)
             .testTag("mini"),
     ) {
-        Row(Modifier.padding(start = 8.dp, end = 12.dp, top = 8.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 8.dp, end = 6.dp, top = 8.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
             Cover(track.thumb, 38.dp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -127,8 +165,12 @@ private fun MiniPlayer(state: PlayerState, onOpen: () -> Unit, onToggle: () -> U
                     Icon(if (state.wantsToPlay) MmIcons.Pause else MmIcons.Play, contentDescription = if (state.wantsToPlay) "Pausar" else "Reproducir", tint = Mm.Tx, modifier = Modifier.size(22.dp))
                 }
             }
-            // «Siguiente» depende de la cola (Fase 2)
-            Icon(MmIcons.Next, contentDescription = null, tint = Mm.Tx, modifier = Modifier.padding(start = 6.dp).size(22.dp).alpha(0.3f))
+            Box(
+                Modifier.size(40.dp).clickable(enabled = state.hasNext, onClick = onNext).alpha(if (state.hasNext) 1f else 0.3f).testTag("miniNext"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(MmIcons.Next, contentDescription = "Siguiente", tint = Mm.Tx, modifier = Modifier.size(22.dp))
+            }
         }
         Box(Modifier.fillMaxWidth().height(2.dp)) {
             Box(Modifier.fillMaxWidth(fraction).height(2.dp).background(Mm.Acc))

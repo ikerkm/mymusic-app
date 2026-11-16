@@ -2,21 +2,18 @@ package com.mymusic.app.playback
 
 import android.content.ComponentName
 import android.content.Context
-import android.net.Uri
 import androidx.core.content.ContextCompat
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
+import com.mymusic.app.data.SessionView
 import com.mymusic.app.data.Track
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
 
 /** Lo que la pantalla necesita saber del reproductor. */
 data class PlayerState(
@@ -25,6 +22,7 @@ data class PlayerState(
     val isLoading: Boolean = false,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
+    val hasNext: Boolean = false,
     val error: String? = null,
     val sessionExpired: Boolean = false,  // el servidor ha rechazado el token
 )
@@ -66,22 +64,37 @@ class PlayerConnection(private val context: Context) {
         controller = null
     }
 
-    fun play(track: Track) {
-        _state.update {
-            PlayerState(track = track, wantsToPlay = true, isLoading = true, durationMs = (track.durationSec ?: 0) * 1000L)
-        }
-        val start = {
+    /** Carga en el reproductor la ventana de la sesión (anterior, actual, siguiente) y, si se pide, empieza a sonar. */
+    fun load(view: SessionView, play: Boolean = true) {
+        val (tracks, start) = Playlist.window(view)
+        val current = tracks.getOrNull(start) ?: return
+        _state.value = PlayerState(
+            track = current,
+            wantsToPlay = play,
+            isLoading = true,
+            positionMs = view.positionMs,
+            durationMs = (current.durationSec ?: 0) * 1000L,
+            hasNext = view.next != null,
+        )
+        val begin = {
             controller?.run {
-                setMediaItem(track.toMediaItem())
+                setMediaItems(tracks.map { Playlist.item(it) }, start, view.positionMs)
+                repeatMode = if (view.repeat == "one") Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 prepare()
-                play()
+                if (play) play() else pause()
             }
             Unit
         }
-        if (controller != null) start() else {
-            pending = start
+        if (controller != null) begin() else {
+            pending = begin
             connect()
         }
+    }
+
+    /** Tras tocar la cola, el aleatorio o la repetición: ajusta la anterior y la siguiente sin cortar lo que suena. */
+    fun apply(view: SessionView) {
+        controller?.let { c -> Playlist.reconcile(c, view) { Playlist.item(it) } }
+        sync()
     }
 
     fun toggle() {
@@ -97,6 +110,15 @@ class PlayerConnection(private val context: Context) {
 
     fun seekTo(positionMs: Long) {
         controller?.seekTo(positionMs)
+    }
+
+    fun next() {
+        controller?.seekToNextMediaItem()
+    }
+
+    /** Como en cualquier reproductor: pasados unos segundos vuelve al principio de la canción; si no, a la anterior. */
+    fun previous() {
+        controller?.seekToPrevious()
     }
 
     fun stop() {
@@ -115,23 +137,17 @@ class PlayerConnection(private val context: Context) {
             if (_state.value.track != null && pending == null) _state.value = PlayerState()
             return
         }
-        val meta = item.mediaMetadata
-        val previous = _state.value
-        val duration = c.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: previous.durationMs
+        val track = Playlist.track(item)
+        val fallback = if (_state.value.track?.key == track.key) _state.value.durationMs else (track.durationSec ?: 0) * 1000L
+        val duration = c.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: fallback
         val error = c.playerError
         _state.value = PlayerState(
-            track = Track(
-                key = item.mediaId,
-                title = meta.title?.toString().orEmpty(),
-                artist = meta.artist?.toString(),
-                durationSec = (duration / 1000).toInt().takeIf { it > 0 },
-                thumb = meta.artworkUri?.toString(),
-                platform = "youtube",
-            ),
+            track = track,
             wantsToPlay = c.playWhenReady && c.playbackState != Player.STATE_ENDED && c.playbackState != Player.STATE_IDLE,
             isLoading = c.playbackState == Player.STATE_BUFFERING,
             positionMs = c.currentPosition.coerceAtLeast(0),
             durationMs = duration,
+            hasNext = c.hasNextMediaItem(),
             error = error?.let(::describe),
             sessionExpired = error?.httpStatus() == 401,
         )
@@ -152,16 +168,4 @@ class PlayerConnection(private val context: Context) {
         }
         else -> "El servidor respondió con un error (${error.httpStatus()})."
     }
-
-    private fun Track.toMediaItem(): MediaItem =
-        MediaItem.Builder()
-            .setMediaId(key)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(title)
-                    .setArtist(artist)
-                    .setArtworkUri(thumb?.let(Uri::parse))
-                    .build()
-            )
-            .build()
 }

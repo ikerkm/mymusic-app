@@ -1,0 +1,243 @@
+package com.mymusic.app.data
+
+import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+/** Una canción tal como la describe el servidor. `key` es «plataforma:id» (p. ej. yt:dQw4w9WgXcQ). */
+data class Track(
+    val key: String,
+    val title: String,
+    val artist: String?,
+    val durationSec: Int?,
+    val thumb: String?,
+    val platform: String,
+)
+
+data class ListSummary(val id: String, val name: String, val count: Int, val durationSec: Int, val thumb: String?)
+
+data class ListDetail(val summary: ListSummary, val tracks: List<Track>)
+
+/** Una canción situada en la sesión: su posición y sus datos. */
+data class Entry(val index: Int, val track: Track)
+
+/** La sesión de escucha tal como la lleva el servidor, con su ventana anterior / actual / siguiente. */
+data class SessionView(
+    val id: String,
+    val sourceType: String,
+    val sourceId: String?,
+    val sourceName: String,
+    val count: Int,
+    val index: Int,
+    val shuffle: Boolean,
+    val repeat: String,          // off | all | one
+    val positionMs: Long,
+    val prev: Entry?,
+    val current: Entry?,
+    val next: Entry?,
+)
+
+data class QueuePage(val index: Int, val count: Int, val entries: List<Entry>)
+
+/** Dirección del servidor y token de este dispositivo. Almacenamiento privado de la app. */
+class Prefs(context: Context) {
+    private val sp = context.applicationContext.getSharedPreferences("mymusic", Context.MODE_PRIVATE)
+
+    var serverUrl: String?
+        get() = sp.getString("server", null)
+        set(value) { sp.edit().putString("server", value).apply() }
+
+    var token: String?
+        get() = sp.getString("token", null)
+        set(value) { sp.edit().putString("token", value).apply() }
+
+    val loggedIn: Boolean get() = !serverUrl.isNullOrBlank() && !token.isNullOrBlank()
+}
+
+/** Error devuelto por el servidor: código HTTP y su campo «error». */
+class ApiException(val status: Int, val error: String) : Exception("$status $error")
+
+// --- JSON ↔ modelos ---
+
+// optString devuelve el texto "null" para un null de JSON: hay que mirarlo aparte
+private fun JSONObject.str(name: String): String? = if (isNull(name)) null else getString(name)
+
+private fun JSONObject.toTrack() = Track(
+    key = getString("key"),
+    title = optString("title"),
+    artist = str("artist"),
+    durationSec = if (isNull("durationSec")) null else getInt("durationSec"),
+    thumb = str("thumb"),
+    platform = optString("platform", "youtube"),
+)
+
+private fun Track.toJson(): JSONObject = JSONObject()
+    .put("key", key).put("title", title).put("artist", artist ?: JSONObject.NULL)
+    .put("durationSec", durationSec ?: JSONObject.NULL).put("thumb", thumb ?: JSONObject.NULL).put("platform", platform)
+
+private fun JSONArray.tracks(): List<Track> = List(length()) { getJSONObject(it).toTrack() }
+
+private fun JSONObject.toSummary() = ListSummary(getString("id"), getString("name"), getInt("count"), optInt("durationSec"), str("thumb"))
+
+private fun JSONObject.entry(name: String): Entry? =
+    if (isNull(name)) null else getJSONObject(name).let { Entry(it.getInt("index"), it.getJSONObject("track").toTrack()) }
+
+private fun JSONObject.toSession(): SessionView {
+    val source = getJSONObject("source")
+    val window = getJSONObject("window")
+    return SessionView(
+        id = getString("id"),
+        sourceType = source.optString("type"),
+        sourceId = source.str("id"),
+        sourceName = source.optString("name"),
+        count = getInt("count"),
+        index = getInt("index"),
+        shuffle = optBoolean("shuffle"),
+        repeat = optString("repeat", "off"),
+        positionMs = optLong("positionMs"),
+        prev = window.entry("prev"),
+        current = window.entry("current"),
+        next = window.entry("next"),
+    )
+}
+
+class Api(private val prefs: Prefs) {
+
+    private fun request(
+        method: String,
+        path: String,
+        body: JSONObject? = null,
+        base: String = prefs.serverUrl.orEmpty(),
+        token: String? = prefs.token,
+    ): JSONObject {
+        val conn = URL(base + path).openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = method
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 30_000
+            conn.setRequestProperty("Accept", "application/json")
+            if (token != null) conn.setRequestProperty("Authorization", "Bearer $token")
+            if (body != null) {
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.outputStream.use { it.write(body.toString().toByteArray()) }
+            }
+            val status = conn.responseCode
+            val stream = if (status in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val json = runCatching { JSONObject(text) }.getOrElse { JSONObject() }
+            if (status !in 200..299) throw ApiException(status, json.optString("error", "http_$status"))
+            return json
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private suspend fun call(method: String, path: String, body: JSONObject? = null): JSONObject =
+        withContext(Dispatchers.IO) { request(method, path, body) }
+
+    private fun enc(text: String) = URLEncoder.encode(text, "UTF-8")
+    private fun JSONObject.sessionOrNull(): SessionView? = if (isNull("session")) null else getJSONObject("session").toSession()
+
+    // --- Sesión del dispositivo ---
+
+    /** Devuelve el token de este dispositivo. */
+    suspend fun login(server: String, password: String, device: String): String = withContext(Dispatchers.IO) {
+        val body = JSONObject().put("password", password).put("device", device)
+        request("POST", "/api/login", body, base = server, token = null).getString("token")
+    }
+
+    suspend fun me(): JSONObject = call("GET", "/api/me")
+
+    suspend fun search(query: String): List<Track> =
+        call("GET", "/api/search?q=" + enc(query)).getJSONArray("results").tracks()
+
+    // --- Listas ---
+
+    suspend fun lists(): List<ListSummary> =
+        call("GET", "/api/lists").getJSONArray("lists").let { a -> List(a.length()) { a.getJSONObject(it).toSummary() } }
+
+    suspend fun createList(name: String): ListSummary =
+        call("POST", "/api/lists", JSONObject().put("name", name)).getJSONObject("list").toSummary()
+
+    suspend fun list(id: String): ListDetail =
+        call("GET", "/api/lists/$id").getJSONObject("list").let { ListDetail(it.toSummary(), it.getJSONArray("tracks").tracks()) }
+
+    suspend fun renameList(id: String, name: String) { call("PUT", "/api/lists/$id", JSONObject().put("name", name)) }
+
+    suspend fun deleteList(id: String) { call("DELETE", "/api/lists/$id") }
+
+    /** true si la canción entró; false si ya estaba en la lista. */
+    suspend fun addToList(id: String, track: Track): Boolean =
+        call("POST", "/api/lists/$id/tracks", JSONObject().put("track", track.toJson())).getInt("added") > 0
+
+    suspend fun removeFromList(id: String, key: String) { call("DELETE", "/api/lists/$id/tracks/${enc(key)}") }
+
+    suspend fun moveInList(id: String, key: String, toIndex: Int) {
+        call("POST", "/api/lists/$id/move", JSONObject().put("key", key).put("toIndex", toIndex))
+    }
+
+    // --- Sesión de escucha ---
+
+    suspend fun session(): SessionView? = call("GET", "/api/session").sessionOrNull()
+
+    suspend fun startList(listId: String, startKey: String?, shuffle: Boolean): SessionView =
+        call("POST", "/api/session", JSONObject().put("listId", listId).put("startKey", startKey ?: JSONObject.NULL).put("shuffle", shuffle))
+            .getJSONObject("session").toSession()
+
+    suspend fun startTrack(track: Track): SessionView =
+        call("POST", "/api/session", JSONObject().put("track", track.toJson())).getJSONObject("session").toSession()
+
+    suspend fun goto(key: String): SessionView =
+        call("POST", "/api/session/goto", JSONObject().put("key", key)).getJSONObject("session").toSession()
+
+    suspend fun sessionOptions(shuffle: Boolean? = null, repeat: String? = null): SessionView {
+        val body = JSONObject()
+        if (shuffle != null) body.put("shuffle", shuffle)
+        if (repeat != null) body.put("repeat", repeat)
+        return call("PUT", "/api/session", body).getJSONObject("session").toSession()
+    }
+
+    suspend fun reportState(key: String, positionMs: Long) {
+        call("PUT", "/api/session/state", JSONObject().put("key", key).put("positionMs", positionMs))
+    }
+
+    suspend fun queue(from: Int, limit: Int = 20): QueuePage =
+        call("GET", "/api/session/queue?from=$from&limit=$limit").let { o ->
+            val entries = o.getJSONArray("entries")
+            QueuePage(o.getInt("index"), o.getInt("count"), List(entries.length()) {
+                entries.getJSONObject(it).let { e -> Entry(e.getInt("index"), e.getJSONObject("track").toTrack()) }
+            })
+        }
+
+    /** mode: "next" (a continuación) o "end" (al final de la cola). */
+    suspend fun enqueue(track: Track, mode: String): SessionView =
+        call("POST", "/api/session/queue", JSONObject().put("track", track.toJson()).put("mode", mode)).getJSONObject("session").toSession()
+
+    // Mover y quitar van por clave de canción, no por posición: una orden repetida no hace daño
+    suspend fun moveQueued(key: String, to: Int): SessionView =
+        call("POST", "/api/session/queue/move", JSONObject().put("key", key).put("to", to)).getJSONObject("session").toSession()
+
+    suspend fun removeQueued(key: String): SessionView =
+        call("DELETE", "/api/session/queue/${enc(key)}").getJSONObject("session").toSession()
+
+    // --- Historial ---
+
+    /** Canciones escuchadas, lo más reciente primero. Con `distinct`, cada canción una sola vez. */
+    suspend fun history(limit: Int, distinct: Boolean): List<Track> =
+        call("GET", "/api/history?limit=$limit" + if (distinct) "&distinct=1" else "").getJSONArray("entries")
+            .let { a -> List(a.length()) { a.getJSONObject(it).getJSONObject("track").toTrack() } }
+
+    companion object {
+        /** «mymusic.ejemplo.com/» → «https://mymusic.ejemplo.com» */
+        fun normalizeServer(input: String): String {
+            val trimmed = input.trim().trimEnd('/')
+            return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
+        }
+    }
+}

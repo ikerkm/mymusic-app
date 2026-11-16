@@ -1,6 +1,6 @@
 # Secretos y datos: nunca al repositorio
 .env
-data/
+/server/data/
 *.jks
 *.keystore
 keystore.properties

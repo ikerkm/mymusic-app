@@ -98,7 +98,22 @@ object MmIcons {
     val Settings = line("M4 7h9M19 7h1M4 17h1M11 17h9", dot(16f, 7f, 2.5f), dot(8f, 17f, 2.5f))
     val Down = line("M5 9l7 7 7-7")
     val ListAdd = line("M4 6h12M4 11h12M4 16h6M17 14v6M14 17h6")
+    val Plus = line("M12 5v14M5 12h14")
+    val Back = line("M15 5l-7 7 7 7")
+    val Forward = line("M9 5l7 7-7 7")
+    val Import = line("M12 4v11M7 11l5 5 5-5M5 20h14")
+    val Drag = line("M5 9h14M5 15h14")
+    val Bin = line("M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13")
+    val Edit = line("M4 20h4L19 9l-4-4L4 16z", "M13 7l4 4")
 }
+
+/** 42000 s → «11 h 40 min»; 1500 s → «25 min». */
+fun formatTotal(seconds: Int): String {
+    val minutes = (seconds + 30) / 60
+    return if (minutes >= 60) "%d h %02d min".format(minutes / 60, minutes % 60) else "$minutes min"
+}
+
+fun songs(count: Int) = if (count == 1) "1 canción" else "$count canciones"
 
 /** Carátula cuadrada con esquinas redondeadas; mientras carga (o si no hay) se ve un degradado. */
 @Composable

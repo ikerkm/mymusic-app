@@ -1,6 +1,6 @@
 {
   "name": "mymusic-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Servidor de MyMusic: busca, extrae el audio al momento y lo sirve a la app",
   "type": "module",

@@ -2,33 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createApp, parseRange } from '../src/app.js';
-import { Auth } from '../src/auth.js';
-import { AudioCache } from '../src/audio.js';
+import { parseRange } from '../src/app.js';
 import { parseKey } from '../src/sources.js';
-import { fakeAudio, fakeOpen, tempDataDir } from './helpers.js';
+import { PASSWORD, fakeAudio, startServer as start } from './helpers.js';
 
-const PASSWORD = 'una-clave-de-prueba';
 const KEY = 'yt:dQw4w9WgXcQ';
-
-// Servidor de prueba en un puerto libre, con yt-dlp y el buscador sustituidos por dobles
-async function start({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search } = {}) {
-    const dir = tempDataDir();
-    const auth = new Auth(dir);
-    if (password) auth.setPassword(password);
-    const open = fakeOpen(bytes, openOptions);
-    const cache = new AudioCache({ maxBytes: 1e9, trackMaxBytes: 1e9, open, ...cacheOptions });
-    const app = createApp({ auth, cache, open, search: search ?? (async q => [{ key: KEY, title: `resultado de ${q}` }]), version: 'test' });
-    const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
-    const base = `http://127.0.0.1:${server.address().port}`;
-    const api = (path, { token, ...init } = {}) => fetch(base + path, {
-        ...init,
-        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
-    });
-    const login = async (pw = PASSWORD) => api('/api/login', { method: 'POST', body: JSON.stringify({ password: pw, device: 'prueba' }) });
-    const token = password ? (await (await login()).json()).token : null;
-    return { dir, auth, cache, open, api, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
-}
 
 test('parseRange', () => {
     assert.equal(parseRange(undefined, 100), null);
