@@ -1,6 +1,7 @@
 import express from 'express';
 import { once } from 'node:events';
 import { sniffMime } from './audio.js';
+import { sessionCookie } from './auth.js';
 import { ListStore, cleanTrack } from './lists.js';
 import { parseKey, parseLink } from './sources.js';
 import { explain } from './ytdlp.js';
@@ -25,6 +26,9 @@ export function parseRange(header, total) {
     return [start, end];
 }
 
+// El panel solo carga código y estilos propios; de fuera, únicamente las carátulas (imágenes)
+const WEB_CSP = "default-src 'self'; img-src 'self' https: data:; media-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+
 const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.remoteAddress ?? 'desconocida');
 
 /**
@@ -34,7 +38,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, webDir = null, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -78,11 +82,17 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         }
         const token = auth.issueToken(user.id, req.body?.device);
         log(`[login] sesión nueva de ${user.name}: ${String(req.body?.device ?? 'dispositivo').slice(0, 60)}`);
+        // El panel web no recibe el token: viaja en una cookie que su JavaScript no puede leer
+        if (req.body?.web === true) {
+            res.setHeader('Set-Cookie', sessionCookie(req, token));
+            return res.json({ user: { name: user.name, admin: user.admin } });
+        }
         res.json({ token, user: { name: user.name, admin: user.admin } });
     });
 
     app.post('/api/logout', requireAuth, (req, res) => {
         auth.revoke(req.token);
+        if (req.viaCookie) res.setHeader('Set-Cookie', sessionCookie(req, null));
         res.json({ ok: true });
     });
 
@@ -325,6 +335,8 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         ...view,
         device: undefined,
         active: !view.device || view.device === req.device.id,
+        // Si la lleva otro dispositivo del usuario, cuál («estaba sonando en tu Pocophone»)
+        deviceName: view.device && view.device !== req.device.id ? auth.deviceName(req.user.id, view.device) : null,
         window: { prev: entryShown(view.window.prev), current: entryShown(view.window.current), next: entryShown(view.window.next) },
     } : null);
     const otherDevice = req => {
@@ -520,6 +532,19 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
 
     app.use('/api', priv);
     app.use('/api', (req, res) => res.status(404).json({ error: 'not_found' }));
+
+    // --- Panel web: las páginas son archivos tal cual, sin compilar ---
+    if (webDir) {
+        app.use(express.static(webDir, {
+            index: 'index.html',
+            setHeaders: res => {
+                res.setHeader('Cache-Control', 'no-cache');        // siempre la versión desplegada, comprobando si cambió
+                res.setHeader('Content-Security-Policy', WEB_CSP);
+                res.setHeader('X-Content-Type-Options', 'nosniff');
+                res.setHeader('Referrer-Policy', 'no-referrer');
+            },
+        }));
+    }
     app.use((req, res) => res.status(404).end());
     // Errores no previstos (p. ej. JSON mal formado): respuesta corta, sin trazas
     app.use((error, req, res, next) => {    // eslint-disable-line no-unused-vars

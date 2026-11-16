@@ -17,8 +17,8 @@ echo "== 1/4 pruebas en el PC"
 grep -E "ℹ (tests|pass|fail)" /tmp/mymusic_test.log | tr '\n' ' '; echo
 
 echo "== 2/4 copiar al Flip (lo anterior va a removed/despliegue_$TS)"
-$FLIP "mkdir -p ~/mymusic/server ~/mymusic/removed/despliegue_$TS && cd ~/mymusic/server && for f in src scripts package.json package-lock.json .env.example; do if [ -e \$f ]; then mv \$f ~/mymusic/removed/despliegue_$TS/; fi; done"
-tar -C "$SRC" -cf - src scripts package.json package-lock.json .env.example | $FLIP 'tar -C ~/mymusic/server -xf -'
+$FLIP "mkdir -p ~/mymusic/server ~/mymusic/removed/despliegue_$TS && cd ~/mymusic/server && for f in src web scripts package.json package-lock.json .env.example; do if [ -e \$f ]; then mv \$f ~/mymusic/removed/despliegue_$TS/; fi; done"
+tar -C "$SRC" -cf - src web scripts package.json package-lock.json .env.example | $FLIP 'tar -C ~/mymusic/server -xf -'
 $FLIP 'cd ~/mymusic/server && if [ ! -f .env ]; then cp .env.example .env; echo ".env creado a partir de .env.example"; fi'
 
 echo "== 3/4 dependencias y reinicio"

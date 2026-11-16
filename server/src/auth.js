@@ -11,6 +11,22 @@ const FAIL_MAX_PER_IP = 5;
 const FAIL_MAX_GLOBAL = 40;
 
 // Nombre de usuario: de 2 a 30 letras, números, punto, guion o guion bajo. Sin distinguir mayúsculas.
+export const COOKIE = 'mm_session';
+
+/** El token que trae la cookie del panel web, o null. */
+export function cookieToken(req) {
+    const match = /(?:^|;\s*)mm_session=([^;]+)/.exec(req.headers.cookie ?? '');
+    return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Cabecera Set-Cookie de la sesión del panel web. Sin token, la borra. */
+export function sessionCookie(req, token) {
+    const local = ['localhost', '127.0.0.1'].includes(req.hostname);      // en pruebas no hay HTTPS
+    const parts = [`${COOKIE}=${token ? encodeURIComponent(token) : ''}`, 'Path=/api', 'HttpOnly', 'SameSite=Strict', `Max-Age=${token ? 365 * 24 * 3600 : 0}`];
+    if (!local) parts.push('Secure');
+    return parts.join('; ');
+}
+
 const NAME = /^[\p{L}\p{N}_.-]{2,30}$/u;
 const nameKey = name => String(name ?? '').trim().toLocaleLowerCase('es');
 
@@ -211,12 +227,26 @@ export class Auth {
     }
 
     // Middleware de Express: exige «Authorization: Bearer <token>» y deja en la petición quién es
+    /** Nombre con el que entró un dispositivo de ese usuario («Xiaomi POCOPHONE F1»), o null. */
+    deviceName(userId, deviceId) {
+        const entry = this.#load(this.tokensPath, []).find(token => token.id === deviceId && token.userId === userId);
+        return entry?.device ?? null;
+    }
+
+    // La app manda su token en la cabecera Authorization. El panel web lo lleva en una cookie que
+    // el JavaScript de la página no puede leer; con ella, todo lo que no sea leer tiene que traer
+    // además la cabecera X-MyMusic, que una página ajena no puede poner.
     middleware() {
         return (req, res, next) => {
-            const match = /^Bearer\s+(\S+)$/.exec(req.headers.authorization ?? '');
-            const device = match && this.verify(match[1]);
+            const bearer = /^Bearer\s+(\S+)$/.exec(req.headers.authorization ?? '');
+            const token = bearer ? bearer[1] : cookieToken(req);
+            const device = token && this.verify(token);
             if (!device) return res.status(401).json({ error: 'unauthorized' });
-            req.token = match[1];
+            if (!bearer && !['GET', 'HEAD'].includes(req.method) && req.headers['x-mymusic'] !== 'web') {
+                return res.status(403).json({ error: 'forbidden' });
+            }
+            req.token = token;
+            req.viaCookie = !bearer;
             req.device = device;
             req.user = device.user;
             next();

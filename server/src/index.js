@@ -42,6 +42,7 @@ const app = createApp({
     matches: new MatchStore(config.dataDir, { search: searchYoutube, log }),
     importers,
     pending: new PendingImports(),
+    webDir: config.webDir,
     prefetchDelayMs: config.prefetchDelayMs,
     version: config.version,
     log,

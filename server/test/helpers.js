@@ -60,7 +60,7 @@ export const PASSWORD = 'una-clave-de-prueba';
 export const OWNER = 'duena';
 
 // Servidor de prueba en un puerto libre, con yt-dlp y el buscador sustituidos por dobles
-export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers } = {}) {
+export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers, webDir } = {}) {
     const [{ createApp }, { Auth }, { AudioCache }, { UserStores }] = await Promise.all([
         import('../src/app.js'), import('../src/auth.js'), import('../src/audio.js'), import('../src/stores.js'),
     ]);
@@ -79,7 +79,7 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
     const matches = new MatchStore(dir, { search: matchSearch ?? (async () => []) });
     const app = createApp({
         auth, cache, open, stores, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
-        matches, importers: importers ?? {}, pending: new PendingImports(),
+        matches, importers: importers ?? {}, pending: new PendingImports(), webDir,
         search: search ?? (async q => [{ key: 'yt:dQw4w9WgXcQ', title: `resultado de ${q}` }]),
     });
     const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
