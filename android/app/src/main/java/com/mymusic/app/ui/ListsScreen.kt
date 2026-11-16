@@ -209,9 +209,10 @@ fun ListDetailScreen(vm: AppViewModel, id: String, state: PlayerState) {
                     ) {
                         Icon(MmIcons.Shuffle, contentDescription = "Aleatorio", tint = Mm.Tx, modifier = Modifier.size(18.dp))
                     }
-                    // Importar por enlace llega en la Fase 3
+                    // Importar: pegar el enlace de una playlist de Spotify o YouTube y traer sus canciones a esta lista
                     Row(
-                        Modifier.height(40.dp).clip(RoundedCornerShape(50)).background(Mm.Sur2).padding(horizontal = 14.dp).alpha(0.4f),
+                        Modifier.height(40.dp).clip(RoundedCornerShape(50)).background(Mm.Sur2)
+                            .clickable { vm.openImport(detail.summary) }.padding(horizontal = 14.dp).testTag("import"),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(MmIcons.Import, contentDescription = null, tint = Mm.Tx, modifier = Modifier.size(16.dp))
@@ -238,6 +239,8 @@ fun ListDetailScreen(vm: AppViewModel, id: String, state: PlayerState) {
                         onClick = { vm.playList(id, startKey = track.key) },
                         number = index + 1,
                         onMenu = { vm.sheet = SheetTarget(track, id) },
+                        // Canción venida de Spotify cuya versión eligió (o elegirá) el servidor: se cambia desde su menú
+                        note = if (track.platform == "spotify" && track.match != "manual") "≈ automática" else null,
                         modifier = Modifier
                             .longPressDraggableHandle(onDragStopped = {
                                 vm.moveInList(id, track.key, tracks.indexOfFirst { it.key == track.key })

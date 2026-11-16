@@ -5,7 +5,9 @@ import { Auth } from './auth.js';
 import { AudioCache } from './audio.js';
 import { createApp } from './app.js';
 import { AppDist } from './appdist.js';
+import { PendingImports, importers } from './importers.js';
 import { ListStore } from './lists.js';
+import { MatchStore } from './matches.js';
 import { HistoryStore, SessionStore } from './session.js';
 import { searchYoutube } from './sources.js';
 import { openAudio } from './ytdlp.js';
@@ -30,6 +32,9 @@ const app = createApp({
     sessions: new SessionStore(config.dataDir),
     history: new HistoryStore(config.dataDir),
     appDist: new AppDist(config.dataDir),
+    matches: new MatchStore(config.dataDir, { search: searchYoutube, log }),
+    importers,
+    pending: new PendingImports(),
     prefetchDelayMs: config.prefetchDelayMs,
     version: config.version,
     log,

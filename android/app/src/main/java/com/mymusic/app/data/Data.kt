@@ -20,7 +20,32 @@ data class Track(
     val durationSec: Int?,
     val thumb: String?,
     val platform: String,
+    /**
+     * Solo en canciones que vienen de Spotify, que suenan por su coincidencia en YouTube:
+     * "pending" (aún sin buscar), "auto" (la eligió el servidor) o "manual" (la eligió el usuario).
+     */
+    val match: String? = null,
 )
+
+/** Lo que trae una playlist de fuera, antes de confirmar que se añade a una lista propia. */
+data class ImportPreview(
+    val importId: String,
+    val platform: String,
+    val title: String,
+    val thumb: String?,
+    val count: Int,
+    val newCount: Int,
+    val already: Int,
+    val truncated: Boolean,     // Spotify solo deja leer las 100 primeras
+)
+
+/** Un vídeo de YouTube candidato a ser la coincidencia de una canción de Spotify. */
+data class MatchCandidate(val track: Track, val durationDiff: Int?)
+
+data class MatchInfo(val currentKey: String?, val auto: Boolean, val candidates: List<MatchCandidate>)
+
+/** Resultado del buscador. `hint` avisa de que lo pegado era una lista ("playlist") o un enlace no reconocido ("bad_link"). */
+data class SearchResponse(val results: List<Track>, val hint: String?)
 
 data class ListSummary(val id: String, val name: String, val count: Int, val durationSec: Int, val thumb: String?)
 
@@ -80,6 +105,7 @@ private fun JSONObject.toTrack() = Track(
     durationSec = if (isNull("durationSec")) null else getInt("durationSec"),
     thumb = str("thumb"),
     platform = optString("platform", "youtube"),
+    match = str("match"),
 )
 
 private fun Track.toJson(): JSONObject = JSONObject()
@@ -160,8 +186,41 @@ class Api(private val prefs: Prefs) {
 
     suspend fun me(): JSONObject = call("GET", "/api/me")
 
-    suspend fun search(query: String): List<Track> =
-        call("GET", "/api/search?q=" + enc(query)).getJSONArray("results").tracks()
+    /** Texto, o un enlace de canción de YouTube o Spotify. */
+    suspend fun search(query: String): SearchResponse =
+        call("GET", "/api/search?q=" + enc(query)).let { SearchResponse(it.getJSONArray("results").tracks(), it.str("hint")) }
+
+    // --- Importar una playlist de fuera ---
+
+    /** Lee la playlist del enlace y dice qué trae para esa lista, sin añadir nada todavía. */
+    suspend fun importPreview(listId: String, url: String): ImportPreview =
+        call("POST", "/api/import/preview", JSONObject().put("listId", listId).put("url", url)).let {
+            ImportPreview(
+                importId = it.getString("importId"), platform = it.optString("platform"), title = it.optString("title"), thumb = it.str("thumb"),
+                count = it.getInt("count"), newCount = it.getInt("newCount"), already = it.getInt("already"), truncated = it.optBoolean("truncated"),
+            )
+        }
+
+    /** Añade a la lista las canciones de una playlist ya leída. Devuelve cuántas entraron. */
+    suspend fun confirmImport(listId: String, importId: String): Int =
+        call("POST", "/api/lists/$listId/import", JSONObject().put("importId", importId)).getInt("added")
+
+    // --- Coincidencia en YouTube de una canción de Spotify ---
+
+    suspend fun matchInfo(key: String): MatchInfo = call("GET", "/api/match/${enc(key)}").let { o ->
+        val candidates = o.getJSONArray("candidates")
+        MatchInfo(
+            currentKey = if (o.isNull("current")) null else o.getJSONObject("current").getString("key"),
+            auto = o.optBoolean("auto", true),
+            candidates = List(candidates.length()) { i ->
+                candidates.getJSONObject(i).let { c -> MatchCandidate(c.toTrack(), if (c.isNull("durationDiff")) null else c.getInt("durationDiff")) }
+            },
+        )
+    }
+
+    suspend fun chooseMatch(key: String, candidate: Track) {
+        call("PUT", "/api/match/${enc(key)}", JSONObject().put("track", candidate.toJson()))
+    }
 
     // --- Listas ---
 

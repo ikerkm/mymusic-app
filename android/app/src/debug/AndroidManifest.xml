@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Solo en la compilación de pruebas (debug), la que se usa en el emulador: permite hablar por HTTP
+  sin cifrar con el servidor de pruebas del PC (http://10.0.2.2:3101). La versión de los móviles
+  (release) no lleva esto: solo habla por HTTPS.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

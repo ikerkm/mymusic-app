@@ -14,8 +14,10 @@ import com.mymusic.app.data.Api
 import com.mymusic.app.data.ApiException
 import com.mymusic.app.data.AppRelease
 import com.mymusic.app.data.Entry
+import com.mymusic.app.data.ImportPreview
 import com.mymusic.app.data.ListDetail
 import com.mymusic.app.data.ListSummary
+import com.mymusic.app.data.MatchInfo
 import com.mymusic.app.data.Prefs
 import com.mymusic.app.data.SessionView
 import com.mymusic.app.data.Track
@@ -44,6 +46,15 @@ sealed interface UpdateState {
     data class Available(val release: AppRelease) : UpdateState
     data class Downloading(val release: AppRelease, val progress: Float) : UpdateState
     data class Failed(val release: AppRelease, val message: String) : UpdateState
+}
+
+/** En qué punto está la importación de una playlist de fuera a una lista propia. */
+sealed interface ImportState {
+    data object Idle : ImportState                                   // esperando el enlace
+    data object Reading : ImportState                                // leyendo la playlist
+    data class Ready(val preview: ImportPreview) : ImportState       // se enseña qué trae
+    data class Adding(val preview: ImportPreview) : ImportState
+    data class Failed(val message: String) : ImportState
 }
 
 /** Canción sobre la que se ha abierto el menú. `listId` solo cuando se abre desde dentro de una lista. */
@@ -97,6 +108,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var sheet by mutableStateOf<SheetTarget?>(null)
     var pickFor by mutableStateOf<Track?>(null)    // canción para la que se está eligiendo lista
+    var importFor by mutableStateOf<ListSummary?>(null)      // lista a la que se está importando
+        private set
+    var importState by mutableStateOf<ImportState>(ImportState.Idle)
+        private set
+    var matchFor by mutableStateOf<Track?>(null)             // canción de Spotify a la que se le cambia la coincidencia
+        private set
+    var matchInfo by mutableStateOf<MatchInfo?>(null)
+        private set
+    var searchHint by mutableStateOf<String?>(null)
+        private set
     var notice by mutableStateOf<String?>(null)    // aviso breve en pantalla
 
     private var lastKey: String? = null
@@ -197,6 +218,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         overlays.clear()
         sheet = null
         pickFor = null
+        importFor = null
+        matchFor = null
+        matchInfo = null
         loginError = message
         loggedIn = false
     }
@@ -279,7 +303,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         searchError = null
         viewModelScope.launch {
             try {
-                results = api.search(text)
+                val found = api.search(text)
+                results = found.results
+                searchHint = when (found.hint) {
+                    "playlist" -> "Eso es el enlace de una lista. Para traerla, abre una lista tuya y pulsa Importar."
+                    "bad_link" -> "No reconozco ese enlace. Valen los de canciones de YouTube y Spotify."
+                    else -> null
+                }
                 searched = true
             } catch (e: ApiException) {
                 if (e.status == 401) logout(EXPIRED) else searchError = "La búsqueda ha fallado. Prueba otra vez."
@@ -385,6 +415,95 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun moveInList(listId: String, key: String, toIndex: Int) = run("No se pudo reordenar.") {
         api.moveInList(listId, key, toIndex)
         openList = api.list(listId)
+    }
+
+    // ------------------------------------------------------------------ importar una playlist de fuera
+
+    fun openImport(list: ListSummary) {
+        importFor = list
+        importState = ImportState.Idle
+    }
+
+    fun closeImport() {
+        importFor = null
+        importState = ImportState.Idle
+    }
+
+    /** Lee la playlist del enlace y enseña qué trae. Todavía no añade nada. */
+    fun previewImport(url: String) {
+        val list = importFor ?: return
+        if (importState is ImportState.Reading || importState is ImportState.Adding) return
+        importState = ImportState.Reading
+        viewModelScope.launch {
+            importState = try {
+                ImportState.Ready(api.importPreview(list.id, url.trim()))
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED)
+                ImportState.Failed(
+                    when (e.error) {
+                        "bad_link" -> "Ese enlace no es de una lista de Spotify o YouTube."
+                        "not_a_playlist" -> "Es el enlace de una canción, no de una lista. Las canciones sueltas se pegan en Buscar."
+                        "mix_not_supported" -> "Las mezclas automáticas de YouTube no se pueden importar."
+                        "empty_playlist" -> "Esa lista está vacía."
+                        "import_failed" -> "No se ha podido leer la lista. Comprueba que es pública."
+                        else -> "No se ha podido leer la lista (${e.status})."
+                    }
+                )
+            } catch (e: Exception) {
+                ImportState.Failed("Sin conexión con el servidor.")
+            }
+        }
+    }
+
+    fun confirmImport() {
+        val list = importFor ?: return
+        val preview = (importState as? ImportState.Ready)?.preview ?: return
+        importState = ImportState.Adding(preview)
+        viewModelScope.launch {
+            try {
+                val added = api.confirmImport(list.id, preview.importId)
+                notice = if (added == 1) "1 canción añadida a «${list.name}»" else "$added canciones añadidas a «${list.name}»"
+                closeImport()
+                lists = api.lists()
+                if (openList?.summary?.id == list.id) openList = api.list(list.id)
+            } catch (e: ApiException) {
+                importState = ImportState.Failed(if (e.status == 410) "Ha pasado demasiado tiempo. Vuelve a pegar el enlace." else "No se pudo añadir. Prueba otra vez.")
+            } catch (e: Exception) {
+                importState = ImportState.Failed("Sin conexión con el servidor.")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ coincidencia de una canción de Spotify
+
+    /** Abre «Cambiar coincidencia»: busca los vídeos de YouTube candidatos para esa canción. */
+    fun openMatch(track: Track) {
+        matchFor = track
+        matchInfo = null
+        viewModelScope.launch {
+            try {
+                matchInfo = api.matchInfo(track.key)
+            } catch (e: Exception) {
+                if (e is ApiException && e.status == 401) logout(EXPIRED)
+                matchFor = null
+                notice = "No se pudieron buscar alternativas."
+            }
+        }
+    }
+
+    fun closeMatch() {
+        matchFor = null
+        matchInfo = null
+    }
+
+    fun chooseMatch(candidate: Track) {
+        val track = matchFor ?: return
+        closeMatch()
+        run("No se pudo cambiar la coincidencia.") {
+            api.chooseMatch(track.key, candidate)
+            notice = "Coincidencia cambiada. Se oirá la próxima vez que suene."
+            openList?.summary?.id?.let { openList = api.list(it) }
+        }
     }
 
     // ------------------------------------------------------------------ cola

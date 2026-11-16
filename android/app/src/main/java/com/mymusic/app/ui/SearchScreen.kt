@@ -70,6 +70,7 @@ fun TrackRow(
     number: Int? = null,
     onMenu: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    note: String? = null,          // marca tras la duración, p. ej. «≈ automática»
 ) {
     Row(
         modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 7.dp),
@@ -93,6 +94,9 @@ fun TrackRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val detail = listOfNotNull(track.artist, track.durationSec?.let { formatTime(it * 1000L) }).joinToString(" · ")
                 Text(detail, color = Mm.Mut, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (note != null) {
+                    Text(" · $note", color = Mm.Acc, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
                 Spacer(Modifier.width(6.dp))
                 PlatformBadge(track.platform)
             }
@@ -120,7 +124,7 @@ fun SearchScreen(vm: AppViewModel, playingKey: String?, modifier: Modifier = Mod
             shape = RoundedCornerShape(12.dp),
             colors = fieldColors(),
             leadingIcon = { Icon(MmIcons.Search, contentDescription = null, tint = Mm.Mut, modifier = Modifier.size(18.dp)) },
-            placeholder = { Text("Canción, artista…", color = Mm.Mut) },
+            placeholder = { Text("Canción, artista o enlace…", color = Mm.Mut) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = {
                 keyboard?.hide()
@@ -135,13 +139,12 @@ fun SearchScreen(vm: AppViewModel, playingKey: String?, modifier: Modifier = Mod
             }
             vm.searchError != null -> Text(vm.searchError.orEmpty(), color = Mm.Yt, fontSize = 13.sp, modifier = Modifier.padding(top = 16.dp))
             !vm.searched -> Text(
-                // En la Fase 1 solo se busca por texto; pegar enlaces llega en la Fase 3
-                "Escribe el nombre de una canción o de un artista.",
+                "Escribe, o pega el enlace de una canción de YouTube o Spotify.",
                 color = Mm.Mut,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            vm.results.isEmpty() -> Text("Sin resultados.", color = Mm.Mut, fontSize = 13.sp, modifier = Modifier.padding(top = 16.dp))
+            vm.results.isEmpty() -> Text(vm.searchHint ?: "Sin resultados.", color = Mm.Mut, fontSize = 13.sp, modifier = Modifier.padding(top = 16.dp))
             else -> {
                 SectionLabel("Resultados")
                 LazyColumn(Modifier.fillMaxSize()) {

@@ -38,6 +38,8 @@ object Mm {
     val Acc = Color(0xFF9D8CFF)
     val OnAcc = Color(0xFF14102E)
     val Yt = Color(0xFFFF6B6B)
+    val Sp = Color(0xFF4AD98A)
+    val Ok = Color(0xFF6FDC9A)
 }
 
 @Composable
@@ -105,6 +107,7 @@ object MmIcons {
     val Drag = line("M5 9h14M5 15h14")
     val Bin = line("M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13")
     val Edit = line("M4 20h4L19 9l-4-4L4 16z", "M13 7l4 4")
+    val Swap = line("M4 8h14l-3-3M20 16H6l3 3")
 }
 
 /** 42000 s → «11 h 40 min»; 1500 s → «25 min». */
@@ -135,6 +138,7 @@ fun Cover(url: String?, size: Dp, radius: Dp = 8.dp, modifier: Modifier = Modifi
 fun PlatformBadge(platform: String, modifier: Modifier = Modifier) {
     val (label, color) = when (platform) {
         "youtube" -> "YouTube" to Mm.Yt
+        "spotify" -> "Spotify" to Mm.Sp
         else -> platform to Mm.Mut
     }
     Text(

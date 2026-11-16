@@ -56,7 +56,7 @@ export function fakeOpen(bytes, { chunk = 1000, delayMs = 1, filesize = bytes.le
 export const PASSWORD = 'una-clave-de-prueba';
 
 // Servidor de prueba en un puerto libre, con yt-dlp y el buscador sustituidos por dobles
-export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20 } = {}) {
+export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers } = {}) {
     const [{ createApp }, { Auth }, { AudioCache }, { ListStore }, { SessionStore, HistoryStore }] = await Promise.all([
         import('../src/app.js'), import('../src/auth.js'), import('../src/audio.js'), import('../src/lists.js'), import('../src/session.js'),
     ]);
@@ -69,8 +69,13 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
     const sessions = new SessionStore(dir);
     const history = new HistoryStore(dir);
     const { AppDist } = await import('../src/appdist.js');
+    const { MatchStore } = await import('../src/matches.js');
+    const { PendingImports } = await import('../src/importers.js');
+    // Buscador de coincidencias y lectores de listas de fuera: dobles, sin red
+    const matches = new MatchStore(dir, { search: matchSearch ?? (async () => []) });
     const app = createApp({
         auth, cache, open, lists, sessions, history, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
+        matches, importers: importers ?? {}, pending: new PendingImports(),
         search: search ?? (async q => [{ key: 'yt:dQw4w9WgXcQ', title: `resultado de ${q}` }]),
     });
     const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
@@ -86,7 +91,7 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
         const res = await api(path, { method, token, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
         return { status: res.status, body: await res.json().catch(() => null) };
     };
-    return { dir, auth, cache, open, lists, sessions, history, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
+    return { dir, auth, cache, open, lists, sessions, history, matches, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
 }
 
 export async function collect(iterable) {

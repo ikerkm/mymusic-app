@@ -105,6 +105,8 @@ fun MainScreen(vm: AppViewModel) {
         // Por encima de cualquier pantalla: el menú de canción, el selector de lista y los avisos
         vm.sheet?.let { TrackSheet(vm, it) }
         vm.pickFor?.let { ListPickerSheet(vm, it) }
+        vm.importFor?.let { ImportSheet(vm, it) }
+        vm.matchFor?.let { MatchSheet(vm, it) }
         Notice(vm, Modifier.align(Alignment.BottomCenter))
     }
 }

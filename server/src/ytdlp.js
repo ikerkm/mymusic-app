@@ -74,6 +74,46 @@ export function openAudio(url) {
     };
 }
 
+/**
+ * Lee una playlist sin extraer el audio de sus vídeos (solo sus datos), como hace el bot.
+ * @returns {Promise<{title: string, entries: {id: string, title: string, duration: number|null, uploader: string|null}[]}>}
+ */
+export function fetchPlaylist(url, { limit = 2000 } = {}) {
+    return new Promise((resolve, reject) => {
+        const args = [
+            '-m', 'yt_dlp',
+            '--dump-single-json',
+            '--yes-playlist',
+            '--flat-playlist',
+            '--playlist-end', String(limit),
+            '--no-warnings',
+            ...commonArgs(),
+            url,
+        ];
+        const child = spawn(config.ytdlpPython, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        let err = '';
+        child.stdout.setEncoding('utf8').on('data', text => { out += text; });
+        child.stderr.setEncoding('utf8').on('data', text => { err = (err + text).slice(-4000); });
+        child.on('error', error => reject(new Error(`No se pudo lanzar yt-dlp: ${error.message}`)));
+        child.on('close', () => {
+            // Se intenta leer aunque haya errores parciales (vídeos privados o retirados dentro de la lista)
+            try {
+                const info = JSON.parse(out);
+                const entries = (info.entries ?? []).filter(Boolean).map(entry => ({
+                    id: String(entry.id ?? ''),
+                    title: String(entry.title ?? ''),
+                    duration: Number.isFinite(entry.duration) ? entry.duration : null,
+                    uploader: entry.uploader ?? entry.channel ?? null,
+                }));
+                resolve({ title: String(info.title ?? 'Lista'), entries });
+            } catch {
+                reject(new Error(explain(err)));
+            }
+        });
+    });
+}
+
 // Mensaje llano a partir del stderr de yt-dlp
 export function explain(stderr) {
     const text = String(stderr ?? '');

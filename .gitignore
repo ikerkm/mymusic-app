@@ -24,3 +24,6 @@ android/.kotlin/
 
 # Clave de firma de la app y su contrasena: fuera del repositorio (copia en la Raspberry)
 /keys/
+
+# Servidor de pruebas local (para el emulador): datos y yt-dlp propios, nada de esto es del usuario
+/pruebas/
