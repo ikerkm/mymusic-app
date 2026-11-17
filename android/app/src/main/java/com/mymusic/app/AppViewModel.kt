@@ -11,9 +11,13 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.mymusic.app.data.AlbumPage
 import com.mymusic.app.data.Api
 import com.mymusic.app.data.ApiException
 import com.mymusic.app.data.AppRelease
+import com.mymusic.app.data.ArtistCard
+import com.mymusic.app.data.ArtistPage
+import com.mymusic.app.data.ArtistSongs
 import com.mymusic.app.data.AutoDetail
 import com.mymusic.app.data.AutoHome
 import com.mymusic.app.data.Entry
@@ -53,6 +57,13 @@ sealed interface Overlay {
     data class AutoList(val kind: String) : Overlay
     /** «Tus estadísticas». */
     data object Stats : Overlay
+    // Artista y disco (§18, mockups/artista-disco-v1.html): datos de YouTube Music por el servidor
+    data class Artist(val id: String) : Overlay
+    /** «Ver todas»: todas sus canciones. */
+    data class ArtistSongs(val id: String) : Overlay
+    /** «Ver todos»: la discografía; `tab` = albums | singles. */
+    data class Discography(val id: String, val tab: String) : Overlay
+    data class Album(val id: String) : Overlay
 }
 
 /** En qué punto está la actualización de la app. */
@@ -82,9 +93,14 @@ sealed interface ProbeState {
 
 /**
  * Canción sobre la que se ha abierto el menú. `listId` solo cuando se abre desde dentro de una lista;
- * `autoKind`, desde una lista automática (sin «Quitar de la lista» ni «Cambiar coincidencia»).
+ * `autoKind`, desde una lista automática (sin «Quitar de la lista» ni «Cambiar coincidencia»);
+ * `albumId` / `artistId`, desde un disco o desde las canciones de un artista (§18): «Reproducir ahora»
+ * pone el disco o sus canciones desde ella.
  */
-data class SheetTarget(val track: Track, val listId: String? = null, val autoKind: String? = null)
+data class SheetTarget(val track: Track, val listId: String? = null, val autoKind: String? = null, val albumId: String? = null, val artistId: String? = null)
+
+/** «Ir al artista» con varios artistas («A, B»): se elige cuál. */
+data class ArtistChoice(val track: Track, val artists: List<ArtistCard>)
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -172,6 +188,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var statsError by mutableStateOf<String?>(null)
         private set
     var showSearch by mutableStateOf(false)                   // pide a la pantalla principal que pase a Buscar
+
+    // --- Artista y disco (§18, mockups/artista-disco-v1.html) ---
+    var searchArtists by mutableStateOf<List<ArtistCard>>(emptyList())   // la fila «Artistas» de Buscar
+        private set
+    val artistPages = mutableStateMapOf<String, ArtistPage>()          // ya leídas en esta visita (el servidor las guarda un día)
+    val artistSongs = mutableStateMapOf<String, ArtistSongs>()
+    val albumPages = mutableStateMapOf<String, AlbumPage>()
+    val pageErrors = mutableStateMapOf<String, String>()               // «artist:<id>», «songs:<id>», «album:<id>» → mensaje
+    var artistChoice by mutableStateOf<ArtistChoice?>(null)
+    var saveAlbumFor by mutableStateOf<AlbumPage?>(null)               // disco que se está guardando como lista
+    var artistRadioStarting by mutableStateOf<String?>(null)           // id del artista cuya radio se está buscando
+        private set
 
     // --- «Me gusta» ---
     // Lo que se ha marcado o quitado en este dispositivo, por clave de canción. Solo hace falta para la
@@ -312,6 +340,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         stats = null
         statsError = null
         statsPeriod = "7"
+        searchArtists = emptyList()
+        artistPages.clear()
+        artistSongs.clear()
+        albumPages.clear()
+        pageErrors.clear()
+        artistChoice = null
+        saveAlbumFor = null
         loginError = message
         loggedIn = false
     }
@@ -328,7 +363,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Overlay.Player -> Unit
             is Overlay.AutoList -> loadAuto(overlay.kind)
             Overlay.Stats -> loadStats("7")                       // se abre siempre en «7 días»
+            is Overlay.Artist -> loadArtist(overlay.id)
+            is Overlay.Discography -> loadArtist(overlay.id)
+            is Overlay.ArtistSongs -> loadArtistSongs(overlay.id)
+            is Overlay.Album -> loadAlbum(overlay.id)
         }
+    }
+
+    /** Cambia de pestaña en la discografía sin apilar otra pantalla. */
+    fun discographyTab(tab: String) {
+        val top = overlays.lastOrNull() as? Overlay.Discography ?: return
+        overlays[overlays.lastIndex] = top.copy(tab = tab)
     }
 
     fun back() {
@@ -425,6 +470,125 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         search()
     }
 
+    // ------------------------------------------------------------------ artista y disco (§18)
+
+    private fun pageFailed(key: String, e: Exception) {
+        if (e is ApiException && e.status == 401) return logout(EXPIRED)
+        pageErrors[key] = when {
+            e is ApiException && e.status == 404 -> "YouTube Music no lo tiene."
+            e is ApiException -> "No se ha podido leer YouTube Music ahora mismo. Prueba otra vez en un rato."
+            else -> "Sin conexión con el servidor."
+        }
+    }
+
+    private fun loadArtist(id: String) {
+        if (artistPages.containsKey(id)) return
+        pageErrors.remove("artist:$id")
+        viewModelScope.launch {
+            try {
+                artistPages[id] = api.artist(id).also { page -> page.top.forEach { likeChanges.remove(it.key) } }
+            } catch (e: Exception) {
+                pageFailed("artist:$id", e)
+            }
+        }
+    }
+
+    private fun loadArtistSongs(id: String) {
+        if (artistSongs.containsKey(id)) return
+        pageErrors.remove("songs:$id")
+        viewModelScope.launch {
+            try {
+                artistSongs[id] = api.artistSongs(id).also { list -> list.tracks.forEach { likeChanges.remove(it.key) } }
+            } catch (e: Exception) {
+                pageFailed("songs:$id", e)
+            }
+        }
+    }
+
+    private fun loadAlbum(id: String) {
+        if (albumPages.containsKey(id)) return
+        pageErrors.remove("album:$id")
+        viewModelScope.launch {
+            try {
+                albumPages[id] = api.album(id).also { album -> album.tracks.forEach { likeChanges.remove(it.key) } }
+            } catch (e: Exception) {
+                pageFailed("album:$id", e)
+            }
+        }
+    }
+
+    /**
+     * «Ir al artista» (reproductor, menú de la canción): el servidor lo busca en YouTube Music. Con uno, se
+     * abre su página; con varios («A, B»), se elige; con ninguno, se avisa.
+     */
+    fun goArtistOf(track: Track) {
+        viewModelScope.launch {
+            try {
+                val found = api.artistsOf(track)
+                when (found.size) {
+                    0 -> notice = "No he encontrado a este artista en YouTube Music."
+                    1 -> openArtist(found[0].id)
+                    else -> artistChoice = ArtistChoice(track, found)
+                }
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED) else notice = "No se ha podido leer YouTube Music ahora mismo."
+            } catch (e: Exception) {
+                notice = "Sin conexión con el servidor."
+            }
+        }
+    }
+
+    /** Abre la página de un artista; si se estaba en el reproductor, se cierra (sigue sonando). */
+    fun openArtist(id: String) {
+        artistChoice = null
+        overlays.removeAll { it == Overlay.Player || it == Overlay.Queue }
+        open(Overlay.Artist(id))
+    }
+
+    fun playAlbum(id: String, startKey: String? = null, shuffle: Boolean = false) =
+        run("No se pudo reproducir el disco.") { start(api.startAlbum(id, startKey, shuffle)) }
+
+    fun playArtist(id: String, startKey: String? = null, shuffle: Boolean = false) =
+        run("No se pudo reproducir. Prueba otra vez.") { start(api.startArtist(id, startKey, shuffle)) }
+
+    /** «Radio» en la página de un artista: una de sus más escuchadas y, detrás, parecidas. */
+    fun playArtistRadio(id: String) {
+        if (artistRadioStarting != null) return
+        artistRadioStarting = id
+        viewModelScope.launch {
+            try {
+                start(api.startArtistRadio(id))
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED) else notice = when (e.error) {
+                    "radio_empty" -> "No han salido canciones nuevas. Prueba más tarde."
+                    else -> "No se pudo empezar la radio. Prueba otra vez."
+                }
+            } catch (e: Exception) {
+                notice = "Sin conexión con el servidor."
+            } finally {
+                artistRadioStarting = null
+            }
+        }
+    }
+
+    /** «Guardar como lista»: el disco pasa a una lista nueva tuya y se abre. `done` recibe null o el error. */
+    fun saveAlbum(id: String, name: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val created = api.saveAlbum(id, name)
+                saveAlbumFor = null
+                done(null)
+                lists = api.lists()
+                open(Overlay.ListDetail(created.id))
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED)
+                done(if (e.error == "bad_name") "Ponle un nombre a la lista." else "No se pudo guardar la lista (${e.status}).")
+            } catch (e: Exception) {
+                done("Sin conexión con el servidor.")
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ actualización de la app
 
     /** Pregunta al servidor si hay una versión más nueva que la instalada. */
@@ -480,6 +644,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val found = api.search(text)
                 results = found.results
+                searchArtists = found.artists
                 found.results.forEach { likeChanges.remove(it.key) }     // lo recién traído manda sobre lo apuntado aquí
                 searchHint = when (found.hint) {
                     "playlist" -> "Eso es el enlace de una lista. Para traerla, abre una lista tuya y pulsa Importar."
@@ -596,6 +761,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         stats = stats?.let { it.copy(topTracks = it.topTracks.map { (track, plays) -> track.marked() to plays }) }
         session = session?.let { it.copy(prev = it.prev?.marked(), current = it.current?.marked(), next = it.next?.marked()) }
         for (i in queue.indices) queue[i] = queue[i].marked()
+        // Artista y disco (§18)
+        for ((id, page) in artistPages.toMap()) artistPages[id] = page.copy(top = page.top.map { it.marked() })
+        for ((id, list) in artistSongs.toMap()) artistSongs[id] = list.copy(tracks = list.tracks.map { it.marked() })
+        for ((id, album) in albumPages.toMap()) albumPages[id] = album.copy(tracks = album.tracks.map { it.marked() })
     }
 
     /** El corazón: mete la canción en la lista de «me gusta» (arriba del todo) o la saca (a la papelera). */

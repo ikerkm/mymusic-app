@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mymusic.app.AppViewModel
+import com.mymusic.app.Overlay
 import com.mymusic.app.SheetTarget
 import com.mymusic.app.data.Track
 
@@ -146,8 +147,18 @@ fun SearchScreen(vm: AppViewModel, playingKey: String?, modifier: Modifier = Mod
             )
             vm.results.isEmpty() -> Text(vm.searchHint ?: "Sin resultados.", color = Mm.Mut, fontSize = 13.sp, modifier = Modifier.padding(top = 16.dp))
             else -> {
-                SectionLabel("Resultados")
                 LazyColumn(Modifier.fillMaxSize()) {
+                    // La fila «Artistas» (§18): solo viene cuando lo escrito se parece a un artista
+                    if (vm.searchArtists.isNotEmpty()) {
+                        item(key = "artistas") {
+                            SectionLabel("Artistas")
+                            ArtistStrip(vm.searchArtists, showListeners = true) { artist ->
+                                keyboard?.hide()
+                                vm.open(Overlay.Artist(artist.id))
+                            }
+                        }
+                    }
+                    item(key = "titulo") { SectionLabel(if (vm.searchArtists.isNotEmpty()) "Canciones" else "Resultados") }
                     items(vm.results, key = { it.key }) { track ->
                         TrackRow(
                             track,

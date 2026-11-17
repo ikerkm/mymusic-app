@@ -98,7 +98,14 @@ fun PlayerScreen(vm: AppViewModel, state: PlayerState) {
                 Text(track.title, color = Mm.Tx, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(track.artist.orEmpty(), color = Mm.Mut, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    // El nombre del artista se puede tocar (§18): abre su página; la flechita lo indica
+                    if (!track.artist.isNullOrBlank()) {
+                        Text(
+                            track.artist, color = Mm.Tx, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false).clickable { vm.goArtistOf(track) }.testTag("playerArtist"),
+                        )
+                        Text(" ›", color = Mm.Acc, fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable { vm.goArtistOf(track) })
+                    }
                     Spacer(Modifier.width(6.dp))
                     PlatformBadge(track.platform)
                     if (fromRadio != null) Text(" · Radio", color = Mm.Acc, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)

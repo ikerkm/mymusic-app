@@ -12,6 +12,7 @@ import { searchYoutube } from './sources.js';
 import { UserStores } from './stores.js';
 import { Usage } from './usage.js';
 import { fetchPlaylist, openAudio } from './ytdlp.js';
+import { YtMusic, createYtMusicClient } from './ytmusic.js';
 
 dotenv.config({ path: join(config.root, '.env') });
 
@@ -48,6 +49,8 @@ const app = createApp({
     importers,
     pending: new PendingImports(),
     radio: new Radio({ fetchMix: async (id, limit) => (await fetchPlaylist(mixUrl(id), { limit })).entries, log }),
+    // Página de artista y de disco (§18): datos de YouTube Music
+    ytmusic: new YtMusic({ client: createYtMusicClient({ log }), log }),
     webDir: config.webDir,
     prefetchDelayMs: config.prefetchDelayMs,
     version: config.version,

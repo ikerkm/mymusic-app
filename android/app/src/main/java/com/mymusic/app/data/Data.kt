@@ -48,8 +48,49 @@ data class MatchCandidate(val track: Track, val durationDiff: Int?)
 
 data class MatchInfo(val currentKey: String?, val auto: Boolean, val candidates: List<MatchCandidate>)
 
-/** Resultado del buscador. `hint` avisa de que lo pegado era una lista ("playlist") o un enlace no reconocido ("bad_link"). */
-data class SearchResponse(val results: List<Track>, val hint: String?)
+/**
+ * Resultado del buscador. `hint` avisa de que lo pegado era una lista ("playlist") o un enlace no reconocido ("bad_link").
+ * `artists`: la fila «Artistas» (§18); solo viene cuando lo escrito se parece a un artista (y nunca con un servidor anterior).
+ */
+data class SearchResponse(val results: List<Track>, val hint: String?, val artists: List<ArtistCard> = emptyList())
+
+// --- Artista y disco (§18, mockups/artista-disco-v1.html): datos de YouTube Music por el servidor ---
+
+/** Un artista tal como sale en una fila (Buscar, «parecidos», «Ir al artista»). `listeners`: «4,1 M». */
+data class ArtistCard(val id: String, val name: String, val listeners: String?, val thumb: String?)
+
+/** Un disco, sencillo o EP. `kind`: album | single | ep. */
+data class Release(val id: String, val title: String, val kind: String, val year: Int?, val thumb: String?)
+
+data class ArtistPage(
+    val id: String,
+    val name: String,
+    val listeners: String?,
+    val thumb: String?,
+    val top: List<Track>,          // sus 5 más escuchadas
+    val songsCount: Int,           // todas sus canciones («Ver todas»)
+    val albums: List<Release>,
+    val singles: List<Release>,
+    val related: List<ArtistCard>,
+)
+
+/** «Ver todas»: la lista entera de sus canciones, de la más escuchada a la menos. */
+data class ArtistSongs(val id: String, val name: String, val count: Int, val durationSec: Int, val tracks: List<Track>)
+
+/** Artista de un disco: `id` null si YouTube Music no lo enlaza. */
+data class ArtistRef(val id: String?, val name: String)
+
+data class AlbumPage(
+    val id: String,
+    val title: String,
+    val kind: String,
+    val year: Int?,
+    val thumb: String?,
+    val artists: List<ArtistRef>,
+    val count: Int,
+    val durationSec: Int,
+    val tracks: List<Track>,
+)
 
 /** `likes`: es la lista de «me gusta» del usuario, a la que va el corazón. */
 data class ListSummary(val id: String, val name: String, val count: Int, val durationSec: Int, val thumb: String?, val likes: Boolean = false)
@@ -253,6 +294,38 @@ private fun JSONObject.toStats(): Stats {
     )
 }
 
+private fun JSONObject.toArtistCard() = ArtistCard(getString("id"), optString("name"), str("listeners"), str("thumb"))
+private fun JSONArray?.artistCards(): List<ArtistCard> = if (this == null) emptyList() else List(length()) { getJSONObject(it).toArtistCard() }
+private fun JSONObject.toRelease() = Release(getString("id"), optString("title"), optString("kind", "album"), if (isNull("year") || !has("year")) null else optInt("year"), str("thumb"))
+private fun JSONArray?.releases(): List<Release> = if (this == null) emptyList() else List(length()) { getJSONObject(it).toRelease() }
+
+private fun JSONObject.toArtistPage() = ArtistPage(
+    id = getString("id"),
+    name = optString("name"),
+    listeners = str("listeners"),
+    thumb = str("thumb"),
+    top = optJSONArray("top")?.tracks() ?: emptyList(),
+    songsCount = optInt("songsCount"),
+    albums = optJSONArray("albums").releases(),
+    singles = optJSONArray("singles").releases(),
+    related = optJSONArray("related").artistCards(),
+)
+
+private fun JSONObject.toAlbumPage(): AlbumPage {
+    val artists = optJSONArray("artists") ?: JSONArray()
+    return AlbumPage(
+        id = getString("id"),
+        title = optString("title"),
+        kind = optString("kind", "album"),
+        year = if (isNull("year") || !has("year")) null else optInt("year"),
+        thumb = str("thumb"),
+        artists = List(artists.length()) { i -> artists.getJSONObject(i).let { ArtistRef(it.str("id"), it.optString("name")) } },
+        count = optInt("count"),
+        durationSec = optInt("durationSec"),
+        tracks = optJSONArray("tracks")?.tracks() ?: emptyList(),
+    )
+}
+
 private fun JSONObject.entry(name: String): Entry? =
     if (isNull(name)) null else getJSONObject(name).let { Entry(it.getInt("index"), it.getJSONObject("track").toTrack()) }
 
@@ -335,7 +408,9 @@ class Api(private val prefs: Prefs) {
 
     /** Texto, o un enlace de canción de YouTube o Spotify. */
     suspend fun search(query: String): SearchResponse =
-        call("GET", "/api/search?q=" + enc(query)).let { SearchResponse(it.getJSONArray("results").tracks(), it.str("hint")) }
+        call("GET", "/api/search?q=" + enc(query)).let {
+            SearchResponse(it.getJSONArray("results").tracks(), if (it.has("hint")) it.str("hint") else null, it.optJSONArray("artists").artistCards())
+        }
 
     // --- Importar una playlist de fuera ---
 
@@ -532,6 +607,39 @@ class Api(private val prefs: Prefs) {
 
     /** period: "7", "30" o "all" (últimos N días, hoy incluido). */
     suspend fun stats(period: String): Stats = call("GET", "/api/stats?period=" + enc(period)).toStats()
+
+    // --- Artista y disco (§18) ---
+    // La primera vez el servidor pregunta a YouTube Music (un segundo o dos); después lo tiene guardado un día.
+
+    suspend fun artist(id: String): ArtistPage = call("GET", "/api/artist/${enc(id)}", readTimeoutMs = 60_000).getJSONObject("artist").toArtistPage()
+
+    suspend fun artistSongs(id: String): ArtistSongs = call("GET", "/api/artist/${enc(id)}/songs", readTimeoutMs = 60_000).getJSONObject("list").let {
+        ArtistSongs(it.getString("id"), it.optString("name"), it.optInt("count"), it.optInt("durationSec"), it.getJSONArray("tracks").tracks())
+    }
+
+    suspend fun album(id: String): AlbumPage = call("GET", "/api/album/${enc(id)}", readTimeoutMs = 60_000).getJSONObject("album").toAlbumPage()
+
+    /** «Guardar como lista»: el disco pasa a una lista nueva del usuario. */
+    suspend fun saveAlbum(id: String, name: String): ListSummary =
+        call("POST", "/api/album/${enc(id)}/save", JSONObject().put("name", name), readTimeoutMs = 60_000).getJSONObject("list").toSummary()
+
+    /** «Ir al artista»: los artistas de YouTube Music de una canción (vacío si no hay ninguno que se llame así). */
+    suspend fun artistsOf(track: Track): List<ArtistCard> =
+        call("GET", "/api/artists/of?key=${enc(track.key)}&title=${enc(track.title)}&artist=${enc(track.artist.orEmpty())}", readTimeoutMs = 60_000)
+            .optJSONArray("artists").artistCards()
+
+    suspend fun startAlbum(id: String, startKey: String?, shuffle: Boolean): SessionView =
+        call("POST", "/api/session", JSONObject().put("album", id).put("startKey", startKey ?: JSONObject.NULL).put("shuffle", shuffle), readTimeoutMs = 60_000)
+            .getJSONObject("session").toSession()
+
+    /** Todas las canciones de un artista, de la más escuchada a la menos. */
+    suspend fun startArtist(id: String, startKey: String?, shuffle: Boolean): SessionView =
+        call("POST", "/api/session", JSONObject().put("artist", id).put("startKey", startKey ?: JSONObject.NULL).put("shuffle", shuffle), readTimeoutMs = 60_000)
+            .getJSONObject("session").toSession()
+
+    /** La radio de un artista: una de sus más escuchadas y, detrás, parecidas. Tarda lo que tarde YouTube en dar las mezclas. */
+    suspend fun startArtistRadio(id: String): SessionView =
+        call("POST", "/api/session", JSONObject().put("radio", "artist").put("artistId", id), readTimeoutMs = 110_000).getJSONObject("session").toSession()
 
     // --- Actualización de la app ---
 

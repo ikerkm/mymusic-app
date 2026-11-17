@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,15 +70,30 @@ internal fun SheetWindowFix() {
 }
 
 @Composable
-private fun Option(icon: ImageVector, label: String, tag: String = "", tint: Color = Mm.Mut, onClick: () -> Unit) {
+private fun Option(icon: ImageVector, label: String, tag: String = "", tint: Color = Mm.Mut, note: String? = null, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 13.dp, horizontal = 2.dp).testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
-        Text(label, color = Mm.Tx, fontSize = 14.sp)
+        Text(label, color = Mm.Tx, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        // A la derecha, el dato de la opción («Ir al artista» → su nombre)
+        if (note != null) Text(note, color = Mm.Mut, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
     }
+}
+
+/**
+ * El nombre que se enseña junto a «Ir al artista». En YouTube el campo es el canal, que no siempre es el
+ * artista (un canal de letras): ahí solo se enseña si el título lo nombra o es un canal «X - Topic».
+ */
+fun artistShown(track: Track): String? {
+    val raw = track.artist.orEmpty()
+    val name = raw.replace(Regex("\\s+-\\s+topic$", RegexOption.IGNORE_CASE), "").replace(Regex("\\s*vevo$", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("\\s+(official|oficial)$", RegexOption.IGNORE_CASE), "").trim()
+    if (name.isEmpty()) return null
+    if (track.platform != "youtube" || Regex("\\s-\\s+topic$", RegexOption.IGNORE_CASE).containsMatchIn(raw)) return name
+    return if (track.title.contains(name, ignoreCase = true)) name else null
 }
 
 /**
@@ -111,6 +127,8 @@ fun TrackSheet(vm: AppViewModel, target: SheetTarget) {
                 when {
                     target.listId != null -> vm.playList(target.listId, startKey = track.key)
                     target.autoKind != null -> vm.playAuto(target.autoKind, startKey = track.key)
+                    target.albumId != null -> vm.playAlbum(target.albumId, startKey = track.key)
+                    target.artistId != null -> vm.playArtist(target.artistId, startKey = track.key)
                     else -> vm.playTrack(track)
                 }
             }
@@ -131,6 +149,14 @@ fun TrackSheet(vm: AppViewModel, target: SheetTarget) {
             Option(MmIcons.ListAdd, "Añadir a una lista…", "optAddToList") {
                 close()
                 vm.pickFor = track
+            }
+            // «Ir al artista» (§18), debajo de «Añadir a una lista…»; con varios artistas («A, B») se elige después
+            if (!track.artist.isNullOrBlank()) {
+                val several = track.artist.contains(',')
+                Option(MmIcons.User, if (several) "Ir al artista…" else "Ir al artista", "optArtist", note = if (several) null else artistShown(track)) {
+                    close()
+                    vm.goArtistOf(track)
+                }
             }
             if (target.listId != null) {
                 HorizontalDivider(color = Mm.Line, modifier = Modifier.padding(vertical = 4.dp))

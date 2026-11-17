@@ -477,3 +477,78 @@ table.stat tr.go{cursor:pointer}
 .m .since{font-size:12px}
 .m .two{grid-template-columns:minmax(0,1fr);gap:0}
 .m .modal .acts.split .btn{flex:1;justify-content:center}
+
+/* ---------- artista y disco (§18, mockups/artista-disco-v1.html) ---------- */
+.back{display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-weight:600;margin-bottom:12px}
+.back:hover{color:var(--tx)}
+/* el nombre del artista que se puede tocar (reproductor, disco) */
+.alink{color:inherit;padding:0;text-align:left;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.alink:hover{color:var(--tx);text-decoration:underline}
+.alink::after{content:" ›";color:var(--acc);font-weight:700}
+.now small .alink{font-size:inherit}
+.artisthead{display:flex;gap:20px;align-items:flex-end}
+.artisthead > .cv{width:120px;height:120px}
+.artisthead .info{flex:1;min-width:0}
+.artisthead .kind{color:var(--mut);font-size:11px;letter-spacing:.7px;text-transform:uppercase}
+.artisthead h3{font-size:32px;letter-spacing:-.6px;line-height:1.1;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.artisthead .acts{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.artistcols{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(0,1fr);gap:28px}
+table.toptracks{margin-top:0}
+/* artistas: en fila (Buscar) o en rejilla de tres («parecidos» en el escritorio) */
+.acards{display:flex;gap:12px;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain}
+.acards::-webkit-scrollbar{display:none}
+.acard{flex:none;width:96px;text-align:center;min-width:0}
+.acard .cv{width:80px;height:80px;margin:0 auto 6px}
+.acard b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acard small{display:block;color:var(--mut);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acard:hover b{color:var(--acc)}
+.acards.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 10px;overflow:visible}
+.acards.grid .acard{width:auto}
+.acards.grid .acard .cv{width:64px;height:64px}
+/* discos: seis en la página del artista, todos en la discografía */
+.releases{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.releases:not(.all) .rel:nth-child(n+7){display:none}
+.releases.all{margin-top:16px}
+.rel{text-align:left;min-width:0}
+.rel .cv{width:100%;height:auto;aspect-ratio:1;border-radius:10px;margin-bottom:7px}
+.rel b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rel small{display:block;color:var(--mut)}
+.rel:hover b{color:var(--acc)}
+.s150{width:150px;height:150px;border-radius:12px}
+.albumhead .by{margin-top:2px}
+table.albumt td.m,table.albumt th.m{width:40px}
+
+.m .back{display:none}
+.m .top.reveal{position:sticky;top:calc(-12px - env(safe-area-inset-top));z-index:3;background:var(--bg);margin:0 -16px;padding:8px 16px 6px}
+.m .top.reveal .ttl{opacity:0;transition:opacity .15s}
+.m .top.reveal.show .ttl{opacity:1}
+.m .top .ttl{flex:1;min-width:0;font-size:16px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m .artisthead{flex-direction:column;align-items:center;text-align:center;gap:10px;margin-top:2px}
+.m .artisthead > .cv{width:96px;height:96px}
+.m .artisthead .info{width:100%}
+.m .artisthead .kind{display:none}
+.m .artisthead h3{font-size:22px;margin-top:0}
+.m .artisthead .mut{font-size:12.5px}
+.m .artisthead .acts{flex-wrap:nowrap;margin-top:14px}
+.m .artisthead .acts .pri{flex:1;justify-content:center}
+.m .artistcols{display:block}
+.m .acards{margin-right:-16px;padding-right:16px;gap:10px}
+.m .acard{width:78px}
+.m .acard .cv{width:74px;height:74px}
+.m .releases{display:flex;gap:10px;overflow-x:auto;margin-right:-16px;padding-right:16px;scrollbar-width:none;overscroll-behavior-x:contain}
+.m .releases::-webkit-scrollbar{display:none}
+.m .releases .rel{flex:none;width:104px}
+.m .releases:not(.all) .rel:nth-child(n+7){display:block}
+.m .releases.all{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 12px;overflow:visible;margin-right:0;padding-right:0}
+.m .releases.all .rel{width:auto}
+/* el texto (tipo y año, título, artista, canciones) en un bloque junto a la carátula; los botones debajo */
+.m .albumhead{grid-template-columns:96px minmax(0,1fr);align-items:center}
+.m .albumhead .cv{grid-row:1;width:96px;height:96px}
+.m .albumhead .meta{grid-column:2;grid-row:1;min-width:0}
+.m .albumhead .kind{display:block;font-size:10.5px;font-weight:700}
+.m .albumhead h3{font-size:19px;white-space:normal;line-height:1.2;margin-top:2px}
+.m .albumhead .by{font-size:12.5px;margin-top:3px}
+.m .albumhead .meta > .mut{font-size:11.5px;margin-top:2px}
+.m .albumhead .acts{grid-row:2}
+.m .row > .ib.like{margin-right:-6px}
+.m .opt small{margin-left:auto;color:var(--mut);font-size:12.5px;max-width:45%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

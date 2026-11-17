@@ -90,10 +90,27 @@ test('búsqueda', async () => {
     const s = await start();
     try {
         const res = await s.api('/api/search?q=amen%20break', { token: s.token });
-        // `liked`: cada canción dice si está en el «me gusta» del usuario (test/likes.test.js)
-        assert.deepEqual(await res.json(), { results: [{ key: KEY, title: 'resultado de amen break', liked: false }] });
+        // `liked`: cada canción dice si está en el «me gusta» del usuario (test/likes.test.js).
+        // `artists`: la fila «Artistas» (§18, test/artista.test.js); aquí no hay YouTube Music, sale vacía.
+        assert.deepEqual(await res.json(), { results: [{ key: KEY, title: 'resultado de amen break', liked: false }], artists: [] });
         assert.equal((await s.api('/api/search?q=', { token: s.token })).status, 400);
     } finally { await s.close(); }
+});
+
+test('búsqueda: si YouTube devuelve una página vacía, se pregunta otra vez (una sola)', async () => {
+    let calls = 0;
+    const s = await start({ search: async q => (++calls === 1 ? [] : [{ key: KEY, title: `resultado de ${q}` }]) });
+    try {
+        const { body } = await s.call('GET', '/api/search?q=rick%20astley');
+        assert.equal(body.results.length, 1, 'la segunda vez sí trae');
+        assert.equal(calls, 2);
+    } finally { await s.close(); }
+    let empty = 0;
+    const t = await start({ search: async () => { empty++; return []; } });
+    try {
+        assert.deepEqual((await t.call('GET', '/api/search?q=nada%20de%20nada')).body.results, []);
+        assert.equal(empty, 2, 'si sigue vacía, «Sin resultados» sin más intentos');
+    } finally { await t.close(); }
 });
 
 test('audio completo: 200 con tipo y tamaño exactos', async () => {

@@ -8,7 +8,7 @@ const num = (v, def) => (v !== undefined && v !== '' && Number.isFinite(Number(v
 // antes de que index.js cargue el .env (lección del bot, 2026-09-18).
 export const config = {
     get root() { return ROOT; },
-    get version() { return '0.11.0'; },
+    get version() { return '0.12.0'; },
     get webDir() { return join(ROOT, 'web'); },
     get dataDir() { return process.env.MYMUSIC_DATA || join(ROOT, 'data'); },
     get host() { return process.env.MYMUSIC_HOST || '127.0.0.1'; },

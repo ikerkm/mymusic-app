@@ -237,7 +237,7 @@ const st = {
     user: null,
     version: '',
     lists: [],
-    view: { name: 'home' },      // home | search | lists | list (id) | history | auto (id = kind) | stats
+    view: { name: 'home' },      // home | search | lists | list (id) | history | auto (id = kind) | stats | artist / artistSongs / discography (id de artista) | album (id)
     session: null,               // la sesión tal como la da el servidor
     recent: [],
     history: [],
@@ -245,7 +245,8 @@ const st = {
     auto: null,                  // «Para ti» en Inicio: resumen de las listas automáticas y de 7 días (GET /auto)
     autoList: null,              // la lista automática abierta (GET /auto/:kind)
     stats: { period: '7', data: null, busy: false, error: null },      // «Tus estadísticas»
-    search: { query: '', results: null, hint: null, busy: false, error: null },
+    search: { query: '', results: null, artists: [], hint: null, busy: false, error: null },
+    pages: new Map(),            // artista y disco (§18), ya leídos: «artist:<id>», «songs:<id>», «album:<id>» → datos del servidor
     queue: { open: false, entries: [], count: 0, limit: 30 },
     full: false,                 // reproductor a pantalla completa (pantalla estrecha)
     radio: false,                // la casilla «Radio» del usuario (se recuerda en el servidor)
@@ -517,6 +518,16 @@ async function playList(listId, startKey = null, shuffle = false) {
     load(session);
 }
 
+// Artista y disco (§18): suenan como una lista que no es tuya
+async function playAlbum(id, startKey = null, shuffle = false) {
+    const { session } = await api('POST', '/session', { album: id, startKey, shuffle }, 60000);
+    load(session);
+}
+async function playArtist(id, startKey = null, shuffle = false) {
+    const { session } = await api('POST', '/session', { artist: id, startKey, shuffle }, 60000);
+    load(session);
+}
+
 async function enqueue(track, mode) {
     try {
         const { session } = await api('POST', '/session/queue', { track: bare(track), mode });
@@ -592,6 +603,24 @@ async function startHomeRadio() {
     }
 }
 
+/** «Radio» en la página de un artista (§18): una de sus más escuchadas y, detrás, parecidas. */
+let artistRadioStarting = null;      // id del artista cuya radio se está buscando
+async function startArtistRadio(id) {
+    if (artistRadioStarting) return;
+    artistRadioStarting = id;
+    if (st.view.name === 'artist') renderMain();
+    try {
+        const { session } = await api('POST', '/session', { radio: 'artist', artistId: id }, 120000);
+        artistRadioStarting = null;
+        load(session);
+    } catch (error) {
+        if (error.status !== 401) toast(error.code === 'radio_empty' ? 'No han salido canciones nuevas. Prueba más tarde.' : 'No se pudo empezar la radio. Prueba otra vez.');
+    } finally {
+        artistRadioStarting = null;
+        if (st.view.name === 'artist') renderMain();
+    }
+}
+
 /** Guardar una canción que puso la radio: si se escucha una lista, va directa a ella; si no, se elige a cuál. */
 async function keepRadioTrack(track) {
     const source = st.session?.source;
@@ -622,6 +651,7 @@ function markLiked(key, liked) {
     for (const entry of [win?.prev, win?.current, win?.next, ...st.queue.entries]) hit(entry?.track);
     for (const track of [pl.track, ...(st.list?.tracks ?? []), ...(st.autoList?.tracks ?? []), ...(st.stats.data?.topTracks ?? []),
         ...(st.search.results ?? []), ...st.recent, ...st.history]) hit(track);
+    for (const page of st.pages.values()) for (const track of [...(page.top ?? []), ...(page.tracks ?? [])]) hit(track);
     updateBar();
 }
 
@@ -634,7 +664,7 @@ async function setLike(track, liked) {
     await refreshLists();
     if (st.view.name === 'list' && st.view.id === reply.list?.id) loadList(reply.list.id);
     else if (st.view.name === 'auto') loadAuto(st.view.id).catch(() => {});      // «en <lista>» / «sin guardar» cambia
-    else if (st.view.name === 'lists' || st.view.name === 'home') renderMain();
+    else if (['lists', 'home', 'artist', 'artistSongs', 'album'].includes(st.view.name)) renderMain();
 }
 const toggleLike = track => run(() => setLike(track, !track.liked), 'No se pudo cambiar el «me gusta». Prueba otra vez.');
 
@@ -716,7 +746,7 @@ function openMenu(x, y, items, track = null) {
             items.map(item => (item === 'sep' ? h('hr') : h('button.opt', {
                 type: 'button', role: 'menuitem', class: item.danger ? 'danger' : '',
                 onclick: () => { closeMenu(); run(item.run); },
-            }, item.icon && icon(...item.icon.split(' ')), item.label))));
+            }, item.icon && icon(...item.icon.split(' ')), item.label, item.note && h('small', null, item.note)))));
         menuEl = h('div.dim.sheetdim', { onpointerdown: event => { if (event.target === menuEl) { closeMenu(); swallowClick(); } } }, sheet);
         document.body.append(menuEl);
         return;
@@ -807,6 +837,11 @@ function trackMenu(track, { listId = null, play, auto = false }) {
         { label: track.liked ? 'Quitar de «me gusta»' : 'Me gusta', icon: track.liked ? 'heart liked' : 'heart', run: () => setLike(track, !track.liked) },
         { label: 'Añadir a una lista…', icon: 'listadd', run: () => pickList(track) },
     ];
+    // «Ir al artista» (§18): con varios artistas («A, B») se elige cuál
+    if (track.artist) {
+        const several = track.artist.includes(',');
+        items.push({ label: several ? 'Ir al artista…' : 'Ir al artista', icon: 'user', note: several ? null : artistShown(track), run: () => goArtistOf(track) });
+    }
     if (track.key.startsWith('sp:') && !auto) items.push({ label: 'Cambiar coincidencia…', icon: 'swap', run: () => openMatch(track) });
     if (listId) {
         items.push('sep', {
@@ -846,6 +881,43 @@ function pickList(track) {
                 h('div.tx', null, h('b', null, list.name), h('small', null, songs(list.count)))))),
         h('div.acts', null, h('button.btn', { type: 'button', onclick: close }, 'Cancelar')),
     ]);
+}
+
+// ---------------------------------------------------------------- «Ir al artista» (§18)
+
+/**
+ * El nombre que se enseña junto a «Ir al artista». En YouTube el campo es el canal, que no siempre es el
+ * artista (un canal de letras): ahí solo se enseña si el título lo nombra o es un canal «X - Topic».
+ */
+function artistShown(track) {
+    const name = String(track.artist ?? '').replace(/\s+-\s+topic$/i, '').replace(/\s*vevo$/i, '').replace(/\s+(official|oficial)$/i, '').trim();
+    if (!name) return null;
+    if (track.platform !== 'youtube' || /\s-\s+topic$/i.test(track.artist)) return name;
+    return String(track.title ?? '').toLowerCase().includes(name.toLowerCase()) ? name : null;
+}
+
+/** Abre la página del artista de una canción. Lo busca el servidor en YouTube Music; con varios, se elige. */
+async function goArtistOf(track) {
+    closeFull();
+    const { artists } = await api('GET', `/artists/of?${new URLSearchParams({ key: track.key, title: track.title ?? '', artist: track.artist ?? '' })}`);
+    if (artists.length === 0) return toast('No he encontrado a este artista en YouTube Music.');
+    if (artists.length === 1) return go({ name: 'artist', id: artists[0].id });
+    openModal(close => [
+        h('h2', null, 'Ir al artista'),
+        h('p.note', null, track.title),
+        h('div.picks', null, artists.map(artist => h('button.pick', { type: 'button', onclick: () => { close(); go({ name: 'artist', id: artist.id }); } },
+            cover(artist.thumb, 's34 av', artist.id),
+            h('div.tx', null, h('b', null, artist.name), h('small', null, listenersLine(artist, true)))))),
+        h('div.acts', null, h('button.btn', { type: 'button', onclick: close }, 'Cancelar')),
+    ]);
+}
+
+// «4,1 M de oyentes al mes» (o «4,1 M al mes», corto); sin la cifra, «Artista»
+const listenersLine = (artist, short = false) => (artist?.listeners ? `${artist.listeners}${short ? ' al mes' : ' de oyentes al mes'}` : 'Artista');
+
+/** El nombre del artista que se puede tocar (reproductor, cabecera del disco). */
+function artistLink(name, onclick) {
+    return h('button.alink', { type: 'button', title: 'Ir al artista', onclick: event => { event.stopPropagation(); run(onclick, 'No se pudo abrir el artista. Prueba otra vez.'); } }, name);
 }
 
 /** Elegir a mano qué vídeo de YouTube suena para una canción de Spotify. */
@@ -1295,6 +1367,8 @@ function buildShell() {
     const bar = buildBar();
     const mini = buildMini();
     const full = buildFull();
+    // Al bajar en la página de un artista, su nombre aparece en la barra de arriba (pageTop con `reveal`)
+    main.addEventListener('scroll', () => main.querySelector('.top.reveal')?.classList.toggle('show', main.scrollTop > 160), { passive: true });
     const app = h('div.app', null, side, main, bar.el, mini.el);
     root.replaceChildren(app, full.el, drawer);
     ui = { app, side, main, drawer, bar, mini, full, shown: null };
@@ -1439,10 +1513,10 @@ function updateBar() {
     b.title.textContent = track ? track.title : 'Nada sonando';
     b.title.classList.toggle('mut', !track);
     b.sub.classList.toggle('bad', Boolean(pl.error));
-    b.sub.textContent = pl.error ?? (!track
-        ? 'Elige una lista o busca una canción'
-        : [track.artist, fromRadio(track) ? 'Radio' : null, mine && session.count > 1 ? `de ${session.source?.name ?? ''}` : null, mine && session.count > 1 ? `${session.index + 1} de ${session.count}` : null]
-            .filter(Boolean).join(' · '));
+    // El nombre del artista se puede tocar (§18): abre su página
+    const rest = track ? [fromRadio(track) ? 'Radio' : null, mine && session.count > 1 ? `de ${session.source?.name ?? ''}` : null, mine && session.count > 1 ? `${session.index + 1} de ${session.count}` : null].filter(Boolean).join(' · ') : '';
+    if (pl.error || !track) b.sub.textContent = pl.error ?? 'Elige una lista o busca una canción';
+    else b.sub.replaceChildren(...[track.artist ? artistLink(track.artist, () => goArtistOf(track)) : null, track.artist && rest ? ' · ' : null, rest].filter(Boolean));
     b.keep.classList.toggle('hidden', !fromRadio(track));
     b.keep.title = keepTitle();
     syncLikeButton(b.like, track);
@@ -1476,7 +1550,7 @@ function updateBar() {
     m.sub.textContent = pl.error ?? track?.artist ?? '';
     m.sub.classList.toggle('bad', Boolean(pl.error));
     f.title.textContent = track?.title ?? '';
-    f.artist.replaceChildren(pl.error ?? track?.artist ?? '', ...[!pl.error && track ? badge(track.platform) : null, !pl.error && fromRadio(track) ? h('span.auto', null, 'Radio') : null].filter(Boolean));
+    f.artist.replaceChildren(pl.error ?? (track?.artist ? artistLink(track.artist, () => goArtistOf(track)) : ''), ...[!pl.error && track ? badge(track.platform) : null, !pl.error && fromRadio(track) ? h('span.auto', null, 'Radio') : null].filter(Boolean));
     f.artist.classList.toggle('bad', Boolean(pl.error));
     const fromList = mine && session.count > 1 && session.source?.name;
     f.fromLabel.textContent = fromList ? 'Sonando de' : 'Sonando';
@@ -1522,7 +1596,7 @@ function renderSide() {
     ui.side.replaceChildren(
         h('div.brand', null, h('b'), 'MyMusic'),
         h('button.nav', { type: 'button', class: ['home', 'history', 'auto', 'stats'].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
-        h('button.nav', { type: 'button', class: view.name === 'search' ? 'on' : '', onclick: () => go({ name: 'search' }) }, icon('search'), 'Buscar'),
+        h('button.nav', { type: 'button', class: ['search', ...ARTIST_VIEWS].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'search' }) }, icon('search'), 'Buscar'),
         // En pantalla estrecha no hay barra lateral: las listas son la tercera pestaña
         h('button.nav.only-m', { type: 'button', class: view.name === 'lists' || view.name === 'list' ? 'on' : '', onclick: () => go({ name: 'lists' }) }, icon('lib'), 'Listas'),
         h('h4', null, 'Tus listas', h('button', { type: 'button', title: 'Nueva lista', onclick: () => run(createList, 'No se pudo crear la lista.') }, '+')),
@@ -1548,13 +1622,16 @@ async function createList() {
  * @param {object} o  head: títulos de columna · number · platform · badge · menu · play(track) · listId · onMove(key, toIndex)
  *   · auto (lista automática: menú sin quitar ni cambiar coincidencia) · cols [{head, cls, cell(track)}] (columnas de más) · cls
  *   · en pantalla estrecha: line(track) (segunda línea), side(track) (a la derecha) y plain (sin la duración)
+ *   · noArtist (sin la columna Artista: dentro de un disco) · noCover (sin carátula en cada fila) · heart (corazón en
+ *     cada fila: dentro de un disco, §18) · cover (en pantalla estrecha, número y carátula a la vez) · sub(track) (en
+ *     pantalla estrecha, lo que dice la línea de debajo del título en vez del artista)
  */
 function trackTable(tracks, o) {
     if (mobile()) return trackRows(tracks, o);
     const cols = o.cols ?? [];
     const head = o.head && h('thead', null, h('tr', null,
-        o.number && h('th.n', null, '#'), h('th', null, 'Título'), h('th.a', null, 'Artista'),
-        o.platform && h('th.p'), cols.map(col => h('th', { class: col.cls }, col.head)), h('th.r', null, 'Duración'), o.menu && h('th.m')));
+        o.number && h('th.n', null, '#'), h('th', null, 'Título'), !o.noArtist && h('th.a', null, 'Artista'),
+        o.platform && h('th.p'), cols.map(col => h('th', { class: col.cls }, col.head)), h('th.r', null, 'Duración'), o.heart && h('th.m'), o.menu && h('th.m')));
     let dragging = null;
     const rows = tracks.map((track, index) => {
         const play = () => o.play(track);
@@ -1566,14 +1643,15 @@ function trackTable(tracks, o) {
         };
         const row = h('tr', { data: { key: track.key }, class: track.key === pl.key ? 'on' : '', ondblclick: () => run(play, 'No se pudo reproducir. Prueba otra vez.'), oncontextmenu: menu },
             o.number && h('td.n', null, String(index + 1)),
-            h('td', null, h('div.t', null, cover(track.thumb, 's32', track.key), h('span', null, track.title))),
-            h('td.a', null, track.artist ?? ''),
+            h('td', null, h('div.t', null, !o.noCover && cover(track.thumb, 's32', track.key), h('span', null, track.title))),
+            !o.noArtist && h('td.a', null, track.artist ?? ''),
             o.platform && h('td.p', null, badge(track.platform), track.match === 'auto' ? h('span.auto', { title: 'Coincidencia en YouTube elegida automáticamente' }, '≈ automática') : null),
             cols.map(col => {
                 const value = col.cell(track);
                 return h('td', { class: col.cls, title: typeof value === 'string' ? value : null }, value);
             }),
             h('td.r', null, track.durationSec ? fmt(track.durationSec) : ''),
+            o.heart && h('td.m', null, rowHeart(track)),
             o.menu && h('td.m', null, h('button.ib', { type: 'button', title: 'Más', onclick: menu }, icon('more', 'f'))));
         if (o.onMove) {
             row.draggable = true;
@@ -1605,15 +1683,17 @@ function trackRows(tracks, o) {
     const rows = tracks.map((track, index) => {
         const play = () => o.play(track);
         return h('div.row', { data: { key: track.key }, class: track.key === pl.key ? 'on' : '', onclick: () => run(play, 'No se pudo reproducir. Prueba otra vez.') },
-            o.number ? h('span.n', null, String(index + 1)) : cover(track.thumb, 's40', track.key),
+            o.number && h('span.n', null, String(index + 1)),
+            (!o.number || o.cover) && cover(track.thumb, 's40', track.key),
             h('div.t', null,
                 h('b', null, track.title),
                 h('small', null,
-                    [track.artist, !o.plain && track.durationSec ? fmt(track.durationSec) : null].filter(Boolean).join(' · '),
+                    o.sub ? o.sub(track) : [track.artist, !o.plain && track.durationSec ? fmt(track.durationSec) : null].filter(Boolean).join(' · '),
                     o.badge && badge(track.platform),
                     o.platform && track.match === 'auto' ? h('span.auto', null, '≈ automática') : null),
                 o.line && h('small', null, o.line(track))),
             o.side && o.side(track),
+            o.heart && rowHeart(track),
             h('button.ib', { type: 'button', title: 'Más', onclick: event => {
                 event.stopPropagation();
                 openMenu(0, 0, trackMenu(track, { listId: o.listId, play, auto: o.auto }), track);
@@ -1622,6 +1702,13 @@ function trackRows(tracks, o) {
     const box = h('div.rows', null, rows);
     if (o.onMove) touchReorder(box, { onMove: (from, to) => o.onMove(tracks[from].key, to) });
     return box;
+}
+
+/** El corazón de una fila (dentro de un disco, §18): relleno si la canción está en «me gusta». */
+function rowHeart(track) {
+    const button = h('button.ib.like', { type: 'button', onclick: event => { event.stopPropagation(); toggleLike(track); } }, icon('heart'));
+    syncLikeButton(button, track);
+    return button;
 }
 
 // ---------------------------------------------------------------- pantallas
@@ -1645,6 +1732,7 @@ function go(view, { push = true } = {}) {
     if (view.name === 'history') loadHistory().catch(() => toast('No se pudo leer el historial.'));
     if (view.name === 'auto') loadAuto(view.id).catch(() => toast('No se pudo abrir la lista.'));
     if (view.name === 'stats') loadStats(st.stats.period);
+    if (ARTIST_VIEWS.includes(view.name)) loadPage(view);
 }
 
 // «Atrás» del navegador (en el móvil, el gesto o el botón): cierra lo que haya abierto encima y, si no hay nada, vuelve a la pantalla anterior
@@ -1682,7 +1770,10 @@ function renderMain() {
     const id = `${st.view.name}:${st.view.id ?? ''}`;
     const scroll = ui.shown === id ? ui.main.scrollTop : 0;
     ui.shown = id;
-    const build = { home: viewHome, search: viewSearch, lists: viewLists, list: viewList, history: viewHistory, auto: viewAuto, stats: viewStats }[st.view.name] ?? viewHome;
+    const build = {
+        home: viewHome, search: viewSearch, lists: viewLists, list: viewList, history: viewHistory, auto: viewAuto, stats: viewStats,
+        artist: viewArtist, artistSongs: viewArtistSongs, discography: viewDiscography, album: viewAlbum,
+    }[st.view.name] ?? viewHome;
     if (st.view.name === 'search' && ui.main.querySelector('.searchbox')) return renderSearchResults();     // sin tocar lo que se está escribiendo
     ui.main.replaceChildren(...build().flat(Infinity).filter(Boolean));
     ui.main.scrollTop = scroll;
@@ -1742,11 +1833,13 @@ function searchResults() {
     if (s.hint === 'playlist') return h('p.empty', null, 'Ese enlace es de una lista. Ábrela desde una lista tuya con «Importar».');
     if (s.hint === 'bad_link') return h('p.empty', null, 'No reconozco ese enlace.');
     if (!s.results) return null;
-    if (s.results.length === 0) return h('p.empty', null, 'Sin resultados.');
-    return trackTable(s.results, { head: true, menu: true, badge: true, play: playTrack });
+    // La fila «Artistas» (§18): solo viene cuando lo escrito se parece a un artista
+    const artists = s.artists?.length > 0 && [h('div.sec', null, 'Artistas'), artistStrip(s.artists, { listeners: true })];
+    if (s.results.length === 0) return [artists, h('p.empty', null, 'Sin resultados.')];
+    return [artists, artists && h('div.sec', null, 'Canciones'), trackTable(s.results, { head: true, menu: true, badge: true, play: playTrack })];
 }
 function renderSearchResults() {
-    ui?.main.querySelector('.results')?.replaceChildren(...[searchResults()].filter(Boolean));
+    ui?.main.querySelector('.results')?.replaceChildren(...[searchResults()].flat(Infinity).filter(Boolean));
 }
 async function doSearch() {
     const query = st.search.query.trim();
@@ -1758,9 +1851,9 @@ async function doSearch() {
     try {
         const reply = await api('GET', `/search?q=${enc(query)}`, undefined, 60000);
         if (st.search.query.trim() !== query) return;
-        Object.assign(s, { busy: false, results: reply.results ?? [], hint: reply.hint ?? null });
+        Object.assign(s, { busy: false, results: reply.results ?? [], artists: reply.artists ?? [], hint: reply.hint ?? null });
     } catch (error) {
-        Object.assign(s, { busy: false, results: null, error: error.status === 401 ? null : 'No se pudo buscar. Prueba otra vez.' });
+        Object.assign(s, { busy: false, results: null, artists: [], error: error.status === 401 ? null : 'No se pudo buscar. Prueba otra vez.' });
     }
     if (st.view.name === 'search') renderSearchResults();
 }
@@ -1844,6 +1937,205 @@ function viewList() {
                     }),
                 }),
     ];
+}
+
+// ---------------------------------------------------------------- artista y disco (§18, mockups/artista-disco-v1.html)
+
+// Salen de YouTube Music por el servidor (que guarda cada página un día). Nada de esto es del usuario:
+// no salen en Listas, no se renombran ni se ordenan. «Guardar como lista» copia el disco a una lista suya.
+const ARTIST_VIEWS = ['artist', 'artistSongs', 'discography', 'album'];
+const KIND_LABEL = { album: 'Álbum', single: 'Sencillo', ep: 'EP' };
+const pageErrors = new Map();
+const pageKey = view => `${view.name === 'album' ? 'album' : view.name === 'artistSongs' ? 'songs' : 'artist'}:${view.id}`;
+
+async function loadPage(view) {
+    const key = pageKey(view);
+    if (st.pages.has(key)) return;
+    pageErrors.delete(key);
+    try {
+        const path = view.name === 'album' ? `/album/${enc(view.id)}` : view.name === 'artistSongs' ? `/artist/${enc(view.id)}/songs` : `/artist/${enc(view.id)}`;
+        const data = await api('GET', path, undefined, 60000);
+        st.pages.set(key, data.album ?? data.list ?? data.artist);
+        if (st.pages.size > 40) st.pages.delete(st.pages.keys().next().value);
+    } catch (error) {
+        if (error.status === 401) return;
+        pageErrors.set(key, error.status === 404 ? 'YouTube Music no lo tiene.' : 'No se ha podido leer YouTube Music ahora mismo. Prueba otra vez en un rato.');
+    }
+    if (sameView(st.view, view)) renderMain();
+}
+const pageOf = view => ({ data: st.pages.get(pageKey(view)) ?? null, error: pageErrors.get(pageKey(view)) ?? null });
+const pageWait = error => (error ? h('p.err', null, error) : h('p.empty', null, 'Cargando…'));
+
+/**
+ * Arriba: en el móvil, la flecha (y un título); en el escritorio, «‹ Volver» (o a quién se vuelve).
+ * `reveal`: la barra se queda fija y el título solo aparece al bajar (el artista, pantalla 5 de la maqueta).
+ */
+function pageTop(label = 'Volver', title = null, { reveal = false } = {}) {
+    return [
+        h('div.top.only-m', { class: reveal ? 'reveal' : '' }, h('button.ib', { type: 'button', title: 'Volver', onclick: () => history.back() }, icon('back')), title ? h('span.ttl', null, title) : h('span.grow')),
+        h('button.back.only-d', { type: 'button', onclick: () => history.back() }, icon('back', 'sm'), label),
+    ];
+}
+
+// Debajo del título de una de sus canciones: con quién la canta (si no es solo él) y cuánto dura
+function featLine(artistName, track) {
+    const others = String(track.artist ?? '').split(',').map(name => name.trim()).filter(name => name && name.toLowerCase() !== String(artistName).toLowerCase());
+    return [others.length ? `con ${others.join(', ')}` : null, track.durationSec ? fmt(track.durationSec) : null].filter(Boolean).join(' · ');
+}
+
+/** Artistas en fila (Buscar, «parecidos» en el móvil); `grid` = rejilla de tres (escritorio). */
+function artistStrip(artists, { listeners = false, grid = false } = {}) {
+    return h('div.acards', { class: grid ? 'grid' : '' }, artists.map(artist => h('button.acard', { type: 'button', title: artist.name, onclick: () => go({ name: 'artist', id: artist.id }) },
+        cover(artist.thumb, 'av', artist.id), h('b', null, artist.name), listeners && h('small', null, listenersLine(artist, true)))));
+}
+
+const releaseLine = release => [release.kind === 'album' ? null : KIND_LABEL[release.kind], release.year].filter(Boolean).join(' · ');
+function releaseCard(release) {
+    return h('button.rel', { type: 'button', title: release.title, onclick: () => go({ name: 'album', id: release.id }) },
+        cover(release.thumb, '', release.id), h('b', null, release.title), h('small', null, releaseLine(release)));
+}
+function releaseSection(title, releases, onAll) {
+    if (!releases?.length) return null;
+    return [
+        h('div.sec', null, title, h('button', { type: 'button', onclick: onAll }, `Ver todos · ${releases.length}`)),
+        h('div.releases', null, releases.slice(0, 12).map(releaseCard)),
+    ];
+}
+
+// Pantallas 4-5 (móvil) y 8 (escritorio): el artista
+function viewArtist() {
+    const { data: a, error } = pageOf(st.view);
+    if (!a) return [pageTop(), pageWait(error)];
+    const busy = artistRadioStarting === a.id;
+    return [
+        pageTop('Volver', a.name, { reveal: true }),
+        h('div.artisthead', null,
+            cover(a.thumb, 'av', a.id),
+            h('div.info', null,
+                h('div.kind', null, 'Artista'),
+                h('h3', null, a.name),
+                h('div.mut', null, listenersLine(a)),
+                h('div.acts', null,
+                    h('button.btn.pri', { type: 'button', disabled: !a.songsCount, onclick: () => run(() => playArtist(a.id), 'No se pudo reproducir. Prueba otra vez.') }, icon('play', 'f sm'), 'Reproducir'),
+                    h('button.btn', { type: 'button', title: 'Radio de este artista', disabled: busy || !a.songsCount, onclick: () => startArtistRadio(a.id) },
+                        icon('radio', 'sm'), busy ? 'Buscando…' : [h('span.only-d', null, 'Radio de este artista'), h('span.only-m', null, 'Radio')])))),
+        h('div.artistcols', null,
+            h('div', null,
+                h('div.sec', null, 'Canciones más escuchadas', a.songsCount > 0 && h('button', { type: 'button', onclick: () => go({ name: 'artistSongs', id: a.id }) }, `Ver todas · ${a.songsCount}`)),
+                a.top.length ? trackTable(a.top, { number: true, cover: true, menu: true, cls: 'toptracks', sub: track => featLine(a.name, track), play: track => playArtist(a.id, track.key) })
+                    : h('p.empty', null, 'YouTube Music no tiene canciones suyas.')),
+            a.related.length > 0 && h('div.only-d', null, h('div.sec', null, 'Artistas parecidos'), artistStrip(a.related.slice(0, 9), { grid: true }))),
+        releaseSection('Álbumes', a.albums, () => go({ name: 'discography', id: a.id, tab: 'albums' })),
+        releaseSection('Sencillos y EP', a.singles, () => go({ name: 'discography', id: a.id, tab: 'singles' })),
+        a.related.length > 0 && h('div.only-m', null, h('div.sec', null, 'Artistas parecidos'), artistStrip(a.related)),
+    ];
+}
+
+// «Ver todas»: la lista entera de sus canciones, de la más escuchada a la menos. Se ve como una lista y no se edita.
+function viewArtistSongs() {
+    const id = st.view.id;
+    const { data: list, error } = pageOf(st.view);
+    const artist = st.pages.get(`artist:${id}`);
+    if (!list) return [pageTop(artist?.name ?? 'Volver'), pageWait(error)];
+    const start = (key, shuffle) => run(() => playArtist(id, key, shuffle), 'No se pudo reproducir. Prueba otra vez.');
+    return [
+        pageTop(list.name),
+        h('div.listhead', null,
+            cover(artist?.thumb, 's110 av', id),
+            h('div.info', null,
+                h('div.kind', null, 'Canciones de'),
+                h('h3', null, list.name),
+                h('div.mut', null, [songs(list.count), list.durationSec ? fmtTotal(list.durationSec) : null].filter(Boolean).join(' · ')),
+                h('div.acts', null,
+                    h('button.btn.pri', { type: 'button', disabled: list.count === 0, onclick: () => start(null, false) }, icon('play', 'f sm'), 'Reproducir'),
+                    h('button.btn', { type: 'button', title: 'Aleatorio', disabled: list.count === 0, onclick: () => start(null, true) }, icon('shuffle', 'sm'), h('span.only-d', null, 'Aleatorio'))))),
+        trackTable(list.tracks, { head: true, number: true, cover: true, menu: true, sub: track => featLine(list.name, track), play: track => playArtist(id, track.key, false) }),
+    ];
+}
+
+// Pantalla 6: toda la discografía, en dos pestañas
+function viewDiscography() {
+    const view = st.view;
+    const { data: a, error } = pageOf(view);
+    if (!a) return [pageTop(), pageWait(error)];
+    const tab = view.tab === 'singles' ? 'singles' : 'albums';
+    const tabs = h('div.pseg', { role: 'tablist' }, [['albums', `Álbumes · ${a.albums.length}`], ['singles', `Sencillos y EP · ${a.singles.length}`]].map(([value, label]) => h('button', {
+        type: 'button', role: 'tab', class: value === tab ? 'on' : '', 'aria-selected': String(value === tab),
+        onclick: () => { st.view = { ...view, tab: value }; try { history.replaceState({ view: st.view }, ''); } catch { /* sin historial */ } renderMain(); },
+    }, label)));
+    const releases = tab === 'singles' ? a.singles : a.albums;
+    return [
+        pageTop(a.name, a.name),
+        h('h3.only-d', null, a.name),
+        tabs,
+        releases.length ? h('div.releases.all', null, releases.map(releaseCard)) : h('p.empty', null, 'No hay ninguno.'),
+    ];
+}
+
+// Pantallas 7 (móvil) y 9 (escritorio): el disco
+function viewAlbum() {
+    const { data: d, error } = pageOf(st.view);
+    if (!d) return [pageTop(), pageWait(error)];
+    const start = (key, shuffle) => run(() => playAlbum(d.id, key, shuffle), 'No se pudo reproducir. Prueba otra vez.');
+    const by = d.artists.map((artist, i) => [i > 0 ? ', ' : null, artist.id ? artistLink(artist.name, async () => go({ name: 'artist', id: artist.id })) : artist.name]);
+    return [
+        pageTop(d.artists[0]?.name ?? 'Volver'),
+        h('div.listhead.albumhead', null,
+            cover(d.thumb, 's150', d.id),
+            h('div.info', null,
+                // En el móvil, este bloque va junto a la carátula y los botones debajo, a lo ancho
+                h('div.meta', null,
+                    h('div.kind', null, [KIND_LABEL[d.kind] ?? 'Álbum', d.year].filter(Boolean).join(' · ')),
+                    h('h3', null, d.title),
+                    h('div.by', null, by, h('span.mut.only-d', null, ` · ${[songs(d.count), d.durationSec ? fmtTotal(d.durationSec) : null].filter(Boolean).join(' · ')}`)),
+                    h('div.mut.only-m', null, [songs(d.count), d.durationSec ? fmtTotal(d.durationSec) : null].filter(Boolean).join(' · '))),
+                h('div.acts', null,
+                    h('button.btn.pri', { type: 'button', disabled: d.count === 0, onclick: () => start(null, false) }, icon('play', 'f sm'), 'Reproducir'),
+                    h('button.btn', { type: 'button', title: 'Aleatorio', disabled: d.count === 0, onclick: () => start(null, true) }, icon('shuffle', 'sm'), h('span.only-d', null, 'Aleatorio')),
+                    h('button.btn.save', { type: 'button', title: 'Guardar como lista', disabled: d.count === 0, onclick: () => saveAlbum(d) },
+                        icon('listadd', 'sm'), h('span.only-d', null, 'Guardar como lista'), h('span.only-m', null, 'Guardar'))))),
+        d.tracks.length === 0 ? h('p.empty', null, 'YouTube Music no da canciones de este disco.')
+            : trackTable(d.tracks, {
+                head: true, number: true, noArtist: true, noCover: true, heart: true, menu: true, cls: 'albumt',
+                sub: track => (track.durationSec ? fmt(track.durationSec) : ''),
+                play: track => playAlbum(d.id, track.key, false),
+            }),
+    ];
+}
+
+/** «Guardar como lista»: el disco pasa a una lista nueva tuya, con su nombre (se puede cambiar aquí). */
+function saveAlbum(album) {
+    openModal(close => {
+        const input = h('input.in', { type: 'text', value: album.title.slice(0, 80), maxLength: 80, placeholder: 'Nombre de la lista' });
+        const error = h('div');
+        const save = h('button.btn.pri', { type: 'button' }, 'Guardar');
+        const accept = async () => {
+            const name = input.value.trim();
+            if (!name || save.disabled) return;
+            save.disabled = true;
+            try {
+                const { list: created } = await api('POST', `/album/${enc(album.id)}/save`, { name }, 60000);
+                close();
+                await refreshLists();
+                go({ name: 'list', id: created.id });
+            } catch (failure) {
+                save.disabled = false;
+                if (failure.status === 401) return;
+                error.replaceChildren(h('p.err', null, 'No se pudo guardar. Prueba otra vez.'));
+            }
+        };
+        save.addEventListener('click', accept);
+        input.addEventListener('keydown', event => { if (event.key === 'Enter') accept(); });
+        setTimeout(() => input.select(), 0);
+        return [
+            h('h2', null, 'Guardar como lista'),
+            h('p.note', null, `Copia ${album.count === 1 ? 'la canción' : `las ${album.count} canciones`} del disco a una lista nueva tuya.`),
+            h('label', null, 'Nombre'),
+            input,
+            error,
+            h('div.acts.split', null, h('button.btn', { type: 'button', onclick: close }, 'Cancelar'), save),
+        ];
+    });
 }
 
 // Historial completo (desde «Ver todo» en Inicio)

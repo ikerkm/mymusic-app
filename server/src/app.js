@@ -6,9 +6,10 @@ import { LikeSet } from './likes.js';
 import { cleanTrack } from './lists.js';
 import { RADIO_SEEDS, SongSet } from './radio.js';
 import { parseKey, parseLink } from './sources.js';
-import { Listening, isAutoKind, isPeriod } from './stats.js';
+import { Listening, artistOf, isAutoKind, isPeriod } from './stats.js';
 import { note, who } from './usage.js';
 import { explain } from './ytdlp.js';
+import { ALBUM_ID, ARTIST_ID } from './ytmusic.js';
 
 // Tramo pedido por el cliente. null = sin cabecera Range; 'invalid' = no se puede servir.
 export function parseRange(header, total) {
@@ -49,7 +50,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, ytmusic = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, artistsWaitMs = 4000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -93,6 +94,27 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             return { ...show(track), liked: likes.has(track) };
         };
     };
+
+    // Artista de YouTube Music tal como se enseña en una fila («Artistas» de Buscar, «parecidos», «Ir al artista»)
+    const artistCard = artist => ({ id: artist.id, name: artist.name, listeners: artist.listeners ?? null, thumb: artist.thumb ?? null });
+
+    // La fila «Artistas» de Buscar (§18). Si YouTube Music tarda o falla, la búsqueda sale sin ella.
+    async function artistsRow(query) {
+        if (!ytmusic) return [];
+        let timer;
+        const late = new Promise(resolve => { timer = setTimeout(() => resolve([]), artistsWaitMs); });
+        try {
+            return await Promise.race([
+                ytmusic.artistsFor(query).catch(error => {
+                    log(`[ytmusic] artistas de «${query.slice(0, 60)}»: ${String(error?.message ?? error).slice(0, 200)}`);
+                    return [];
+                }),
+                late,
+            ]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
 
     app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -168,7 +190,14 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             }
             if (link) return res.json({ results: [], hint: 'playlist' });
             if (/^https?:\/\//i.test(query)) return res.json({ results: [], hint: 'bad_link' });
-            res.json({ results: (await search(query)).map(shown) });
+            // El buscador de YouTube devuelve a veces una página vacía sin motivo (pasa también en las
+            // coincidencias, matches.js): se pregunta otra vez antes de decir «Sin resultados»
+            const searchOnceMore = async () => {
+                const found = await search(query);
+                return found.length > 0 ? found : search(query);
+            };
+            const [results, artists] = await Promise.all([searchOnceMore(), artistsRow(query)]);
+            res.json({ results: results.map(shown), artists: artists.map(artistCard) });
         } catch (error) {
             log(`[search] error: ${error.message}`);
             res.status(502).json({ error: 'search_failed' });
@@ -398,6 +427,92 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         res.json({ ...stats, topTracks: rowsShown(req, stats.topTracks) });
     });
 
+    // --- Artista y disco (§18) ---
+    // Salen de YouTube Music (ytmusic.js), que guarda cada página un día. Nada de esto es del usuario:
+    // un artista o un disco no son listas suyas; «Guardar como lista» copia el disco a una lista nueva.
+    const needYtm = (req, res, next) => (ytmusic ? next() : res.status(404).json({ error: 'not_found' }));
+    const ytmFailed = (res, error, what) => {
+        log(`[ytmusic] ${what}: ${String(error?.message ?? error).slice(0, 200)}`);
+        res.status(502).json({ error: 'ytmusic_failed' });
+    };
+    const totalSec = tracks => tracks.reduce((sum, track) => sum + (track.durationSec ?? 0), 0);
+
+    priv.get('/artist/:id', needYtm, async (req, res) => {
+        if (!ARTIST_ID.test(req.params.id)) return res.status(400).json({ error: 'bad_id' });
+        try {
+            const page = await ytmusic.artist(req.params.id);
+            if (!page) return res.status(404).json({ error: 'artist_not_found' });
+            const { songs, related, ...rest } = page;
+            // Sus 5 más escuchadas son las primeras de su lista entera («Ver todas»), que va de más a menos escuchada
+            res.json({ artist: { ...rest, related: related.map(artistCard), songsCount: songs.length, top: songs.slice(0, 5).map(showFor(req.ctx)) } });
+        } catch (error) {
+            ytmFailed(res, error, `artista ${req.params.id}`);
+        }
+    });
+
+    // «Ver todas»: la lista entera de sus canciones, de la más escuchada a la menos. Se ve como una lista y no se edita.
+    priv.get('/artist/:id/songs', needYtm, async (req, res) => {
+        if (!ARTIST_ID.test(req.params.id)) return res.status(400).json({ error: 'bad_id' });
+        try {
+            const page = await ytmusic.artist(req.params.id);
+            if (!page) return res.status(404).json({ error: 'artist_not_found' });
+            res.json({ list: { id: page.id, name: page.name, count: page.songs.length, durationSec: totalSec(page.songs), tracks: page.songs.map(showFor(req.ctx)) } });
+        } catch (error) {
+            ytmFailed(res, error, `canciones del artista ${req.params.id}`);
+        }
+    });
+
+    priv.get('/album/:id', needYtm, async (req, res) => {
+        if (!ALBUM_ID.test(req.params.id)) return res.status(400).json({ error: 'bad_id' });
+        try {
+            const album = await ytmusic.album(req.params.id);
+            if (!album) return res.status(404).json({ error: 'album_not_found' });
+            res.json({ album: { ...album, count: album.tracks.length, durationSec: totalSec(album.tracks), tracks: album.tracks.map(showFor(req.ctx)) } });
+        } catch (error) {
+            ytmFailed(res, error, `disco ${req.params.id}`);
+        }
+    });
+
+    // «Guardar como lista»: el disco pasa a una lista nueva del usuario, con su nombre, que ya no cambia sola
+    priv.post('/album/:id/save', needYtm, async (req, res) => {
+        if (!ALBUM_ID.test(req.params.id)) return res.status(400).json({ error: 'bad_id' });
+        const wanted = req.body?.name;
+        if (wanted !== undefined && (typeof wanted !== 'string' || !wanted.trim())) return res.status(400).json({ error: 'bad_name' });
+        try {
+            const album = await ytmusic.album(req.params.id);
+            if (!album) return res.status(404).json({ error: 'album_not_found' });
+            if (album.tracks.length === 0) return res.status(400).json({ error: 'empty_list' });
+            const created = req.ctx.lists.create(wanted ?? album.title);
+            if (!created) return res.status(400).json({ error: 'bad_name' });
+            const { list } = req.ctx.lists.addTracks(created.id, album.tracks);
+            log(`[listas] ${req.user.name} guarda el disco «${album.title}» como «${list.name}» (${list.tracks.length} canciones)`);
+            res.status(201).json({ list: req.ctx.lists.summaryOf(list) });
+        } catch (error) {
+            ytmFailed(res, error, `guardar el disco ${req.params.id}`);
+        }
+    });
+
+    /**
+     * «Ir al artista»: los artistas de YouTube Music de una canción. Spotify junta varios con comas
+     * («A, B»), y las de los discos de YouTube Music también; en YouTube el campo es el canal, y se usa
+     * la misma regla que «Tus estadísticas» (un canal de letras no cuenta como artista). Solo vuelven
+     * los que se llaman como el de la canción: si no hay ninguno, la lista sale vacía.
+     */
+    priv.get('/artists/of', needYtm, async (req, res) => {
+        const source = parseKey(String(req.query.key ?? ''));
+        const raw = String(req.query.artist ?? '').trim().slice(0, 200);
+        const title = String(req.query.title ?? '').slice(0, 300);
+        if (!source || !raw) return res.status(400).json({ error: 'bad_track' });
+        const parts = raw.includes(',') ? raw.split(',').map(part => part.trim()).filter(Boolean) : [raw];
+        const names = [...new Set(parts.map(part => artistOf({ platform: source.platform, title, artist: part })).filter(Boolean))].slice(0, 4);
+        const found = await Promise.allSettled(names.map(name => ytmusic.findArtist(name)));
+        if (found.length && found.every(result => result.status === 'rejected')) return ytmFailed(res, found[0].reason, `artista de «${title.slice(0, 60)}»`);
+        const seen = new Set();
+        const artists = found.map(result => (result.status === 'fulfilled' ? result.value : null))
+            .filter(artist => artist && !seen.has(artist.id) && seen.add(artist.id));
+        res.json({ names, artists: artists.map(artistCard) });
+    });
+
     // --- Sesión de escucha ---
     // Tras cada cambio: la canción actual y la siguiente quedan fijadas en memoria, y la siguiente se
     // prepara si el usuario se queda unos segundos en la actual.
@@ -451,10 +566,13 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
 
     // De qué radio es una sesión. Cada una rota sus semillas y aprende de sus saltos por separado:
     // un salto en la radio de «rock» no le quita nada a «Tu radio» ni a la de otra lista.
+    // La radio de un artista (§18) es «artist:<id>», igual que la opción «Radio» en sus canciones:
+    // las dos son la radio de ese artista y aprenden de los mismos saltos.
+    const artistRadioId = source => (source?.type === 'radio' && /^artist:UC[A-Za-z0-9_-]{22}$/.test(source.id ?? '') ? source.id.slice(7) : null);
     function radioScope(source) {
         if (source?.type === 'list' && source.id) return `list:${source.id}`;
-        if (source?.type === 'radio') return 'home';
-        if (source?.type === 'auto' && source.id) return `auto:${source.id}`;
+        if (source?.type === 'radio') return artistRadioId(source) ? source.id : 'home';
+        if (['auto', 'album', 'artist'].includes(source?.type) && source.id) return `${source.type}:${source.id}`;
         return 'loose';
     }
 
@@ -469,8 +587,11 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         log(`[radio] ${req.user.name} salta «${track.title}» a los ${Math.round(heardMs / 1000)} s (${scope})${blocked}`);
     }
 
-    /** Una tanda para el usuario. `home` = para empezar «Tu radio»; si no, para seguir la sesión abierta. */
-    async function radioBatch(ctx, { home = false } = {}) {
+    /**
+     * Una tanda para el usuario. `home` = para empezar «Tu radio»; `artist` = para empezar la radio de
+     * ese artista (su página de YouTube Music); si no, para seguir la sesión abierta.
+     */
+    async function radioBatch(ctx, { home = false, artist = null } = {}) {
         const { sessions, lists, history, radio: memory } = ctx;
         const exclude = new SongSet();
         const known = track => {
@@ -479,14 +600,21 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         };
         const inSession = sessions.allTracks();
         inSession.forEach(known);
-        const source = home ? { type: 'radio' } : sessions.view()?.source;
+        const source = home ? { type: 'radio' } : artist ? { type: 'radio', id: `artist:${artist.id}` } : sessions.view()?.source;
         const list = source?.type === 'list' ? lists.get(source.id) : null;
+        const artistId = artistRadioId(source);
         let scope;
         let seedTracks;
         if (list) {
             scope = `list:${list.id}`;
             seedTracks = list.tracks;
             list.tracks.forEach(known);
+        } else if (artistId) {
+            // La radio de un artista parte de sus 20 canciones más escuchadas (y de lo que el usuario
+            // haya puesto en la sesión). Sus canciones pueden salir: la mezcla trae suyas y de parecidos.
+            scope = `artist:${artistId}`;
+            const page = artist ?? await ytmusic?.artist(artistId).catch(() => null);
+            seedTracks = [...(page?.songs.slice(0, 20) ?? []), ...inSession.filter(track => !track.radio || track.saved)];
         } else if (source?.type === 'radio') {
             scope = 'home';
             const seen = new Set();
@@ -505,7 +633,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             }
             for (const summary of lists.all()) (lists.get(summary.id)?.tracks ?? []).forEach(take);
         } else {
-            scope = source?.type === 'auto' ? radioScope(source) : 'loose';
+            scope = radioScope(source);
             seedTracks = inSession.filter(track => !track.radio || track.saved);
         }
         const seedKeys = await seedKeysOf(seedTracks);
@@ -598,6 +726,35 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             log(`[radio] «Tu radio» de ${req.user.name}: empieza con ${first.tracks.length} canciones`);
             return reply(req, res, req.ctx.sessions.start({ source: { type: 'radio', name: 'Tu radio' }, tracks: first.tracks, device: req.device.id }));
         }
+        // La radio de un artista (§18): empieza con una de sus 5 más escuchadas y sigue con parecidas
+        // (suyas y de otros artistas), que aprenden de los saltos aparte de las demás radios
+        if (body.radio === 'artist') {
+            if (!radio || !ytmusic) return res.status(404).json({ error: 'not_found' });
+            if (!ARTIST_ID.test(String(body.artistId ?? ''))) return res.status(400).json({ error: 'bad_id' });
+            let page;
+            try {
+                page = await ytmusic.artist(body.artistId);
+            } catch (error) {
+                return ytmFailed(res, error, `radio del artista ${body.artistId}`);
+            }
+            if (!page) return res.status(404).json({ error: 'artist_not_found' });
+            if (page.songs.length === 0) return res.status(422).json({ error: 'no_seeds' });
+            let first = null;
+            for (let attempt = 1; attempt <= 3 && !first; attempt++) {
+                try {
+                    first = await radioBatch(req.ctx, { artist: page });
+                } catch (error) {
+                    log(`[radio] radio de ${page.name}, intento ${attempt}: ${String(error?.message ?? error).slice(0, 200)}`);
+                }
+            }
+            if (!first) return res.status(502).json({ error: 'radio_failed' });
+            const opener = page.songs[Math.floor(Math.random() * Math.min(5, page.songs.length))];
+            const openerSet = new SongSet();
+            openerSet.add(opener);
+            const tracks = [opener, ...first.tracks.filter(track => !openerSet.has(track))];
+            log(`[radio] radio de ${page.name} para ${req.user.name}: empieza con ${tracks.length} canciones`);
+            return reply(req, res, req.ctx.sessions.start({ source: { type: 'radio', id: `artist:${page.id}`, name: `Radio de ${page.name}` }, tracks, device: req.device.id }));
+        }
         // Una lista automática: se calcula ahora y suena como una lista (con la radio, de lo que haya en la sesión)
         if (body.auto !== undefined) {
             const auto = isAutoKind(body.auto) ? listeningOf(req).auto(body.auto) : null;
@@ -607,6 +764,29 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             matches?.remember(tracks);
             return reply(req, res, req.ctx.sessions.start({
                 source: { type: 'auto', id: auto.kind, name: auto.name },
+                tracks,
+                startKey: typeof body.startKey === 'string' ? body.startKey : null,
+                shuffle: body.shuffle === true,
+                device: req.device.id,
+            }));
+        }
+        // Un disco, o todas las canciones de un artista (§18): suenan como una lista que no es suya
+        if (body.album !== undefined || body.artist !== undefined) {
+            if (!ytmusic) return res.status(404).json({ error: 'not_found' });
+            const isAlbum = body.album !== undefined;
+            const id = String(isAlbum ? body.album : body.artist);
+            if (!(isAlbum ? ALBUM_ID : ARTIST_ID).test(id)) return res.status(400).json({ error: 'bad_id' });
+            let found;
+            try {
+                found = isAlbum ? await ytmusic.album(id) : await ytmusic.artist(id);
+            } catch (error) {
+                return ytmFailed(res, error, `${isAlbum ? 'disco' : 'artista'} ${id}`);
+            }
+            if (!found) return res.status(404).json({ error: isAlbum ? 'album_not_found' : 'artist_not_found' });
+            const tracks = isAlbum ? found.tracks : found.songs;
+            if (tracks.length === 0) return res.status(400).json({ error: 'empty_list' });
+            return reply(req, res, req.ctx.sessions.start({
+                source: isAlbum ? { type: 'album', id: found.id, name: found.title } : { type: 'artist', id: found.id, name: found.name },
                 tracks,
                 startKey: typeof body.startKey === 'string' ? body.startKey : null,
                 shuffle: body.shuffle === true,

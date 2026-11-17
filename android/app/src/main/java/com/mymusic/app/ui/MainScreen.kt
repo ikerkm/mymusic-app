@@ -82,6 +82,10 @@ fun MainScreen(vm: AppViewModel) {
                         Overlay.History -> HistoryScreen(vm, state)
                         Overlay.Settings -> SettingsScreen(vm)
                         Overlay.Trash -> TrashScreen(vm)
+                        is Overlay.Artist -> ArtistScreen(vm, top.id, state)
+                        is Overlay.ArtistSongs -> ArtistSongsScreen(vm, top.id, state)
+                        is Overlay.Discography -> DiscographyScreen(vm, top.id, top.tab)
+                        is Overlay.Album -> AlbumScreen(vm, top.id, state)
                         else -> when (tab) {
                             Tab.Home -> HomeScreen(vm, state)
                             Tab.Search -> SearchScreen(vm, playingKey = state.track?.key)
@@ -120,6 +124,8 @@ fun MainScreen(vm: AppViewModel) {
         vm.matchFor?.let { MatchSheet(vm, it) }
         vm.restoreFor?.let { RestorePicker(vm, it) }
         vm.saveAutoFor?.let { SaveAutoSheet(vm, it) }
+        vm.saveAlbumFor?.let { SaveAlbumSheet(vm, it) }
+        vm.artistChoice?.let { ArtistChoiceSheet(vm, it) }
         Notice(vm, Modifier.align(Alignment.BottomCenter))
     }
 }

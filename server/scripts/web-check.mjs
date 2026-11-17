@@ -981,6 +981,195 @@ try {
         await until(`!!document.querySelector('.login input[name=username]')`, 8000);
     }
 
+    // 12. Artista y disco (mockups/artista-disco-v1.html): datos de YouTube Music de verdad, en el escritorio y en el móvil
+    {
+        const P = 'artista: ';
+        const PM = `${P}móvil: `;
+        const query = process.env.MYMUSIC_CHECK_ARTIST ?? 'daft punk';
+        const apiCall = (method, path, body) => js(`fetch(${JSON.stringify(`/api${path}`)}, { method: ${JSON.stringify(method)}, credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-MyMusic': 'web' }, body: ${body ? JSON.stringify(JSON.stringify(body)) : 'undefined'} }).then(r => r.json())`);
+        // Entra (si la cookie sigue valiendo, ya está dentro) y espera Inicio
+        const enter = async () => {
+            await send('Page.navigate', { url: `${base}/` });
+            const where = await until(`document.querySelector('.login input[name=username]') ? 'login' : (${text('.main h3')} === 'Inicio' && 'home')`, 15000);
+            if (where === 'login') {
+                await js(typeInto('.login input[name=username]', user));
+                await js(typeInto('.login input[name=password]', password));
+                await js(`document.querySelector('.login form').requestSubmit()`);
+            }
+            return until(`${text('.main h3')} === 'Inicio'`, 15000);
+        };
+        const searchFor = async (words, rows) => {
+            await js(typeInto('.searchbox input', words));
+            await js(press('.searchbox input', 'Enter'));
+            return until(`document.querySelectorAll(${JSON.stringify(rows)}).length > 0 && !${text('.main .results')}.includes('Buscando')`, 60000);
+        };
+        const visible = sel => `[...document.querySelectorAll(${JSON.stringify(sel)})].filter(e => e.offsetParent).length`;
+
+        // --- Escritorio (pantallas 8 y 9; Buscar, menú y barra como en el móvil)
+        await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+        check(`${P}entra en el escritorio`, Boolean(await enter()));
+        await js(clickText('.side .nav', 'Buscar'));
+        await until(`!!document.querySelector('.searchbox input')`);
+        await searchFor('amen break 174', '.main tbody tr');
+        check(`${P}buscar una canción no saca la fila «Artistas»`, await js(`!document.querySelector('.main .acards')`));
+        await searchFor(query, '.main tbody tr');
+        const cards = await until(`document.querySelectorAll('.main .acards .acard').length`, 10000);
+        const secs = await js(`[...document.querySelectorAll('.main .results .sec')].map(e => e.textContent).join('|')`);
+        check(`${P}buscar «${query}» trae «Artistas» y debajo «Canciones»`, cards > 0 && secs === 'Artistas|Canciones', `${cards} artistas, el primero «${await js(text('.main .acards .acard b'))}»`);
+        await shot('12a_buscar_artistas');
+
+        await js(`document.querySelector('.main .acards .acard').click()`);
+        const topRows = await until(`${text('.artisthead h3')} !== '' && document.querySelectorAll('.main table.toptracks tbody tr').length`, 60000);
+        const artistId = await js('history.state?.view?.id');
+        const page = (await apiCall('GET', `/artist/${artistId}`)).artist;
+        const shownReleases = await js(visible('.main .releases .rel'));
+        check(`${P}su página: nombre, oyentes, sus ${Math.min(5, page.songsCount)} más escuchadas, discos y parecidos`,
+            topRows === Math.min(5, page.songsCount) && await js(text('.artisthead h3')) === page.name
+            && (await js(text('.artisthead .mut'))).includes(page.listeners ?? 'Artista')
+            && shownReleases === Math.min(6, page.albums.length) + Math.min(6, page.singles.length)
+            && await js(`document.querySelectorAll('.main .acards.grid .acard').length`) === Math.min(9, page.related.length),
+            `${page.name} · ${page.listeners} · ${page.songsCount} canciones · ${page.albums.length} álbumes · ${page.singles.length} sencillos · ${page.related.length} parecidos`);
+        await shot('12b_artista');
+
+        if (page.albums.length) {
+            await js(clickText('.main .sec button', 'Ver todos'));
+            check(`${P}«Ver todos» de los álbumes abre la discografía`, Boolean(await until(`${text('.pseg button.on')}.startsWith('Álbumes') && document.querySelectorAll('.releases.all .rel').length === ${page.albums.length}`, 8000)));
+            await shot('12c_discografia');
+            await js(clickText('.pseg button', 'Sencillos'));
+            check(`${P}la pestaña «Sencillos y EP»`, Boolean(await until(`${text('.pseg button.on')}.startsWith('Sencillos') && document.querySelectorAll('.releases.all .rel').length === ${page.singles.length}`, 8000)));
+            await js('history.back()');
+            check(`${P}volver lleva al artista`, Boolean(await until(`${text('.artisthead h3')} === ${JSON.stringify(page.name)}`, 8000)));
+        }
+
+        await js(clickText('.main .sec button', 'Ver todas'));
+        check(`${P}«Ver todas» abre sus ${page.songsCount} canciones`, Boolean(await until(`${text('.listhead h3')} === ${JSON.stringify(page.name)} && document.querySelectorAll('.main tbody tr').length === ${page.songsCount}`, 30000)));
+        await js('history.back()');
+        await until(`${text('.artisthead h3')} === ${JSON.stringify(page.name)}`, 8000);
+
+        // El disco (pantalla 9)
+        await js(`[...document.querySelectorAll('.main .releases .rel')].find(e => e.offsetParent).click()`);
+        const albumId = await until(`history.state?.view?.name === 'album' && history.state.view.id`, 8000);
+        const album = (await apiCall('GET', `/album/${albumId}`)).album;
+        const albumRows = await until(`document.querySelectorAll('.main table.albumt tbody tr').length`, 60000);
+        check(`${P}el disco: tipo y año, título, artista que se toca, filas con su corazón y sin columna de artista`,
+            albumRows === album.count && await js(text('.albumhead h3')) === album.title && (await js(text('.albumhead .kind'))).includes(String(album.year ?? ''))
+            && await js(`!!document.querySelector('.albumhead .by .alink') && !document.querySelector('.main table.albumt th.a') && document.querySelectorAll('.main table.albumt tbody tr .ib.like').length === ${album.count}`),
+            `«${album.title}» (${album.kind} ${album.year}), ${albumRows} canciones`);
+        await shot('12d_disco');
+
+        const heart = `document.querySelector('.main table.albumt tbody tr .ib.like')`;
+        const wasLiked = await js(`${heart}.classList.contains('on')`);
+        await js(`${heart}.click()`);
+        const flipped = await until(`${heart}.classList.contains('on') === ${!wasLiked}`, 8000);
+        await js(`${heart}.click()`);
+        const restored = await until(`${heart}.classList.contains('on') === ${wasLiked}`, 8000);
+        check(`${P}el corazón de una fila mete y saca la canción de «me gusta»`, Boolean(flipped && restored));
+
+        await js(clickText('.albumhead .btn', 'Reproducir'));
+        const bar = await until(`(${text('.player .now small')}).includes(${JSON.stringify(`de ${album.title}`)}) && ${text('.player .now small')}`, 30000);
+        check(`${P}«Reproducir» pone el disco («de ${album.title}» en la barra)`, Boolean(bar), bar ?? await js(text('.player .now small')));
+        await js(`document.querySelector('.player .now .alink').click()`);
+        check(`${P}el nombre del artista en la barra abre su página`, Boolean(await until(`${text('.artisthead h3')} === ${JSON.stringify(page.name)} && history.state?.view?.name === 'artist'`, 30000)));
+
+        await js(clickText('.artisthead .btn', 'Radio'));
+        const radioBar = await until(`(${text('.player .now small')}).includes('Radio de ') && ${text('.player .now small')}`, 120000);
+        const session = (await apiCall('GET', '/session')).session;
+        check(`${P}«Radio de este artista» empieza su radio`, Boolean(radioBar) && session?.source?.id === `artist:${artistId}`, `${session?.source?.name} · ${session?.count} canciones`);
+        await js(`${A}?.pause()`);
+
+        // «Ir al artista» desde el menú de una canción de Buscar
+        await js(clickText('.side .nav', 'Buscar'));
+        await until(`document.querySelectorAll('.main tbody tr').length > 0`, 8000);
+        // Una canción del canal del propio artista (el primer resultado puede ser un recopilatorio de un canal
+        // cualquiera: ahí el panel avisa de que no lo encuentra, que es lo correcto)
+        const ownRow = `[...document.querySelectorAll('.main tbody tr')].find(row => row.querySelector('td.a')?.textContent === ${JSON.stringify(page.name)})`;
+        const hasOwn = await js(`!!${ownRow}`);
+        await js(`(${hasOwn ? ownRow : `document.querySelector('.main tbody tr')`}).querySelector('.ib').click()`);
+        await until(`!!document.querySelector('.menu')`);
+        check(`${P}el menú de una canción tiene «Ir al artista»`, await js(`[...document.querySelectorAll('.menu button')].some(e => e.textContent.startsWith('Ir al artista'))`), hasOwn ? `canal «${page.name}»` : 'ninguna del canal del artista: la primera');
+        await shot('12e_menu_ir_al_artista');
+        await js(clickText('.menu button', 'Ir al artista'));
+        const went = await until(`(history.state?.view?.name === 'artist' && ${text('.artisthead h3')}) || (document.querySelector('.modal .pick') && 'elegir')`, 30000);
+        if (went === 'elegir') await js(`document.querySelector('.modal .pick').click()`);
+        check(`${P}«Ir al artista» abre la página de un artista`, Boolean(await until(`history.state?.view?.name === 'artist' && ${text('.artisthead h3')}`, 30000)), went);
+
+        // «Guardar como lista» desde el disco, y la lista de prueba a la papelera
+        await js('history.back()');
+        await until(`history.state?.view?.name === 'search'`, 8000);
+        await send('Page.navigate', { url: `${base}/` });       // vuelta al disco por el camino corto: artista → disco
+        await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        await js(clickText('.side .nav', 'Buscar'));
+        await searchFor(query, '.main tbody tr');
+        await until(`document.querySelectorAll('.main .acards .acard').length`, 10000);
+        await js(`document.querySelector('.main .acards .acard').click()`);
+        await until(`document.querySelectorAll('.main .releases .rel').length`, 60000);
+        await js(`[...document.querySelectorAll('.main .releases .rel')].find(e => e.offsetParent).click()`);
+        await until(`document.querySelectorAll('.main table.albumt tbody tr').length`, 60000);
+        const savedName = `zz prueba disco ${Date.now() % 100000}`;
+        await js(clickText('.albumhead .btn', 'Guardar'));
+        await until(`!!document.querySelector('.modal input')`);
+        await js(typeInto('.modal input', savedName));
+        await js(clickText('.modal .btn', 'Guardar'));
+        const savedOk = await until(`${text('.listhead h3')} === ${JSON.stringify(savedName)} && document.querySelectorAll('.main tbody tr').length === ${album.count}`, 15000);
+        check(`${P}«Guardar como lista» crea la lista con sus ${album.count} canciones y la abre`, Boolean(savedOk));
+        const savedId = await js('history.state?.view?.id');
+        if (savedOk && savedId) await apiCall('DELETE', `/lists/${savedId}`);
+
+        // --- Móvil (pantallas 1-7)
+        await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+        check(`${PM}entra`, Boolean(await enter()) && await js(`document.documentElement.classList.contains('m')`));
+        await tap(byText('.side .nav', 'Buscar'));
+        await until(`!!document.querySelector('.searchbox input')`);
+        await searchFor(query, '.main .row[data-key]');
+        const mCards = await until(visible('.main .acards .acard'), 10000);
+        check(`${PM}Buscar trae la fila «Artistas» y cabe`, mCards > 0 && await js(fits), `${mCards} artistas`);
+        await shot('m12a_buscar_artistas');
+
+        await tap(q('.main .acards .acard'));
+        const mTop = await until(`${text('.artisthead h3')} !== '' && document.querySelectorAll('.main .rows .row[data-key]').length`, 60000);
+        check(`${PM}el artista: foto, nombre, «Reproducir» y «Radio», sus canciones con número y carátula, y cabe`,
+            mTop === Math.min(5, page.songsCount) && await js(`!!document.querySelector('.main .rows .row .n') && !!document.querySelector('.main .rows .row .cv') && ${text('.artisthead .acts')}.includes('Radio')`) && await js(fits),
+            `${mTop} canciones`);
+        await shot('m12b_artista');
+        await js(`document.querySelector('.main').scrollTop = 99999`);
+        await sleep(300);
+        check(`${PM}más abajo: discos en fila y artistas parecidos`, await js(`${visible('.main .releases .rel')} > 0 && ${visible('.main .acards .acard')} === ${page.related.length}`) && await js(fits));
+        await shot('m12c_artista_abajo');
+
+        await tap(`[...document.querySelectorAll('.main .releases .rel')].find(e => e.offsetParent)`);
+        const mRows = await until(`!!document.querySelector('.albumhead') && document.querySelectorAll('.main .row[data-key]').length`, 60000);
+        check(`${PM}el disco: tipo y año arriba, filas con su corazón, y cabe`,
+            mRows === album.count && await js(`getComputedStyle(document.querySelector('.albumhead .kind')).display !== 'none' && document.querySelectorAll('.main .row .ib.like').length === ${album.count}`) && await js(fits),
+            `${mRows} canciones`);
+        await shot('m12d_disco');
+
+        await tap(`document.querySelector('.main .row[data-key] > .ib:last-child')`);
+        check(`${PM}el menú de la canción tiene «Ir al artista»`, Boolean(await until(`[...document.querySelectorAll('.sheet .opt')].some(e => e.textContent.startsWith('Ir al artista'))`, 5000)));
+        await shot('m12e_menu');
+        await tap(byText('.sheet .opt', 'Ir al artista'));
+        check(`${PM}«Ir al artista» abre su página`, Boolean(await until(`${text('.artisthead h3')} === ${JSON.stringify(page.name)}`, 30000)));
+
+        // Tocar una de sus canciones, abrir el reproductor y tocar el nombre del artista
+        await tap(q('.main .rows .row[data-key] .t'));
+        await until(`!!document.querySelector('.mini:not(.hidden)')`, 30000);
+        await tap(q('.mini .t'));
+        await until(`!document.querySelector('.full').classList.contains('hidden') && !!document.querySelector('.full .artist .alink')`, 10000);
+        await shot('m12f_reproductor');
+        const linkText = await js(text('.full .artist .alink'));
+        await tap(q('.full .artist .alink'));
+        const mWent = await until(`document.querySelector('.full').classList.contains('hidden') && ((history.state?.view?.name === 'artist' && ${text('.artisthead h3')}) || (document.querySelector('.modal .pick') && 'elegir'))`, 30000);
+        if (mWent === 'elegir') {
+            await shot('m12g_elegir_artista');
+            await tap(q('.modal .pick'));
+        }
+        check(`${PM}en el reproductor, el nombre del artista lo cierra y abre su página`, Boolean(await until(`history.state?.view?.name === 'artist' && ${text('.artisthead h3')}`, 30000)), `«${linkText}»${mWent === 'elegir' ? ' (varios: se elige)' : ''}`);
+        await js(`${A}?.pause()`);
+        await apiCall('POST', '/logout');
+    }
+
     // Respuestas que la propia prueba provoca y el navegador apunta en la consola: no son fallos
     const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/, /status of 403 .*\/api\/usage/];
     const real = problems.filter(problem => !expected.some(pattern => pattern.test(problem)));

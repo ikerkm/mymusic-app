@@ -123,6 +123,9 @@ object MmIcons {
     private const val HEART = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
     val Heart = line(HEART)
     val HeartFull = solid(HEART)
+
+    // Artista y disco (mockups/artista-disco-v1.html)
+    val User = line(dot(12f, 8f, 4f), "M4 21a8 8 0 0 1 16 0")
 }
 
 /** 42000 s → «11 h 40 min»; 1500 s → «25 min». */
