@@ -181,7 +181,7 @@ fun RestorePicker(vm: AppViewModel, item: TrashedTrack) {
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { vm.restoreTrack(item, list.id) }.padding(vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Cover(list.thumb, 38.dp)
+                        ListCover(list, 38.dp)
                         Spacer(Modifier.width(10.dp))
                         Text(list.name, color = Mm.Tx, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }

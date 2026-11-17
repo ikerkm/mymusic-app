@@ -7,10 +7,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.mymusic.app.data.ListSummary
 
 /** Colores de la maqueta v1 (mockups/app-v1.html). */
 object Mm {
@@ -110,6 +113,11 @@ object MmIcons {
     val Edit = line("M4 20h4L19 9l-4-4L4 16z", "M13 7l4 4")
     val Swap = line("M4 8h14l-3-3M20 16H6l3 3")
     val Radio = line(dot(12f, 12f, 2f), "M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8")
+
+    // «Me gusta» (mockups/me-gusta-v1.html): solo el contorno si la canción no está, relleno si está
+    private const val HEART = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+    val Heart = line(HEART)
+    val HeartFull = solid(HEART)
 }
 
 /** 42000 s → «11 h 40 min»; 1500 s → «25 min». */
@@ -132,6 +140,22 @@ fun Cover(url: String?, size: Dp, radius: Dp = 8.dp, modifier: Modifier = Modifi
         if (url != null) {
             AsyncImage(model = url, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         }
+    }
+}
+
+/** Carátula de una lista. La de «me gusta» lleva un corazón en vez de la imagen de su primera canción. */
+@Composable
+fun ListCover(list: ListSummary, size: Dp, radius: Dp = 8.dp, modifier: Modifier = Modifier) {
+    if (!list.likes) return Cover(list.thumb, size, radius, modifier)
+    Box(
+        modifier
+            .size(size)
+            .clip(RoundedCornerShape(radius))
+            .background(Color(0xFF1B1640))
+            .border(1.dp, Mm.Acc, RoundedCornerShape(radius)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(MmIcons.HeartFull, contentDescription = "Me gusta", tint = Mm.Acc, modifier = Modifier.size(size * 0.42f))
     }
 }
 

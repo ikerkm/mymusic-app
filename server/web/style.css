@@ -359,3 +359,22 @@ div.pick{cursor:default}
 .m .check input{width:20px;height:20px}
 .m .banner .radtile{width:52px;height:52px}
 .m .drawer .head .check{margin-right:4px}
+
+/* ====================================================================================
+   «Me gusta»: corazón en el reproductor y en el menú de la canción, y la lista del
+   corazón con su carátula propia (mockups/me-gusta-v1.html).
+   ==================================================================================== */
+.ic.liked{fill:var(--acc);stroke:var(--acc)}
+.ib.like{flex:none}
+.ib.like.on{color:var(--acc)}
+.ib.like.on .ic{fill:currentColor}
+.cv.like{background:#1b1640;border:1px solid var(--acc);display:flex;align-items:center;justify-content:center}
+.cv.like .ic{width:20px;height:20px}
+.s34.like .ic{width:16px;height:16px}
+.s110.like .ic{width:40px;height:40px}
+.card .cv.like .ic{width:30px;height:30px}
+.pl > .ic{margin-right:-2px}
+.m .full .meta .ib.like.on{color:var(--acc)}
+.m .listhead .cv.like .ic{width:30px;height:30px}
+.m .card .cv.like .ic{width:20px;height:20px}
+.m .sheet .opt .ic.liked{color:var(--acc)}

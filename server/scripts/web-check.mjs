@@ -162,6 +162,11 @@ try {
     const found = await until(`document.querySelectorAll('.main tbody tr').length`, 60000);
     check('buscar devuelve resultados', found > 0, `${found} resultados`);
     await shot('3_buscar');
+    // Por si una pasada anterior se cortó a medias: las dos canciones de la prueba empiezan sin «me gusta»
+    await js(`Promise.all([...document.querySelectorAll('.main tbody tr')].slice(0, 2).map(row => fetch('/api/likes', {
+        method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-MyMusic': 'web' },
+        body: JSON.stringify({ track: { key: row.dataset.key, title: 'limpieza de la prueba' }, liked: false }),
+    }))).then(() => true)`);
 
     // Menú de los tres puntos → Añadir a una lista (las dos primeras canciones)
     for (const index of [0, 1]) {
@@ -255,6 +260,38 @@ try {
     await js(`document.querySelector('.player [title=Siguiente]').click()`);
     const second = await until(`${text('.player .now b')} !== ${JSON.stringify(first)} && !${A}.paused && ${A}.currentTime > 1 && ${text('.player .now b')}`, 90000, 500);
     check('«siguiente» pasa a la segunda canción y suena', Boolean(second), String(second));
+
+    // 3b. «Me gusta»: el corazón de la barra mete la canción que suena en la lista del corazón, arriba del todo
+    const heart = `document.querySelector('.player .now .like')`;
+    const heartOn = `${heart}.classList.contains('on')`;
+    const likesPl = `[...document.querySelectorAll('.side .pl')].find(e => e.querySelector('.ic')?.getClientRects().length > 0)`;
+    const likesCount = `(Number(${likesPl}?.querySelector('small').textContent) || 0)`;
+    const playingKey = await js(`document.querySelector('.main tbody tr.on').dataset.key`);
+    check('la barra tiene el corazón, vacío', await js(`!!${heart} && !${heart}.classList.contains('hidden') && !${heartOn}`));
+    const likedBefore = await js(likesCount);
+    await js(`${heart}.click()`);
+    check('el corazón de la barra se rellena y avisa', await until(`${heartOn} && ${text('.toast')}.includes('Añadida a')`, 8000), await js(text('.toast')));
+    check('la lista del corazón sale la primera, con su corazón, y cuenta una más', await until(`!!${likesPl} && document.querySelector('.side .pl') === ${likesPl} && ${likesCount} === ${likedBefore + 1}`, 8000), `${likedBefore} → ${await js(likesCount)}`);
+    await shot('6b_me_gusta_barra');
+    await js(`${likesPl}.click()`);
+    check('dentro, la carátula es el corazón y la canción recién marcada está arriba', await until(`document.querySelector('.listhead .cv.like .ic')?.getClientRects().length > 0 && document.querySelector('.main tbody tr')?.dataset.key === ${JSON.stringify(playingKey)}`, 8000));
+    await shot('6c_me_gusta_lista');
+    // Su menú ofrece quitarla; al quitarla sale de la lista y el corazón de la barra se vacía
+    await js(`document.querySelector('.main tbody tr .ib').click()`);
+    await until(`!!document.querySelector('.menu')`);
+    check('el menú de una canción marcada ofrece quitarla', await js(clickText('.menu button', 'Quitar de «me gusta»')));
+    check('quitarla la saca de la lista y vacía el corazón', await until(`!${heartOn} && document.querySelector('.main tbody tr')?.dataset.key !== ${JSON.stringify(playingKey)} && ${likesCount} === ${likedBefore}`, 8000), await js(text('.toast')));
+    // Desde el menú de la otra canción de la lista de prueba (la que no suena): marcar y quitar
+    await js(clickText('.side .pl', listName));
+    await until(`${text('.listhead h3')} === ${JSON.stringify(listName)} && document.querySelectorAll('.main tbody tr').length === 2`, 8000);
+    for (const [label, done] of [['Me gusta', 'Añadida a'], ['Quitar de «me gusta»', 'Quitada de']]) {
+        await js(`[...document.querySelectorAll('.main tbody tr')].find(row => !row.classList.contains('on')).querySelector('.ib').click()`);
+        await until(`!!document.querySelector('.menu')`);
+        const offered = await js(clickText('.menu button', label));
+        check(`menú de una canción: «${label}»`, offered && Boolean(await until(`${text('.toast')}.includes(${JSON.stringify(done)})`, 8000)), await js(text('.toast')));
+        await sleep(600);
+    }
+    check('la lista del corazón queda como estaba', await js(likesCount) === likedBefore, `${await js(likesCount)} canciones`);
 
     // 4. Relevo: otro dispositivo del mismo usuario toma la sesión
     const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user, password, device: 'Móvil de prueba' }) });
@@ -501,6 +538,14 @@ try {
     await tap(q('.full .big'));
     check(`${M}y reanuda`, await until(`!${A}.paused`, 10000));
 
+    // «Me gusta»: el corazón va junto al título, a la izquierda del botón de añadir a una lista (mockups/me-gusta-v1.html)
+    const mHeart = `document.querySelector('.full .meta .like')`;
+    check(`${M}el reproductor tiene el corazón, vacío, antes del botón de añadir a una lista`, await js(`!!${mHeart} && ${mHeart}.getClientRects().length > 0 && ${mHeart}.nextElementSibling?.title === 'Añadir a una lista' && !${mHeart}.classList.contains('on')`));
+    await tap(mHeart);
+    check(`${M}tocar el corazón lo rellena y avisa`, await until(`${mHeart}.classList.contains('on') && ${text('.toast')}.includes('Añadida a')`, 8000), await js(text('.toast')));
+    await sleep(300);
+    await shot('m09b_reproductor_me_gusta');
+
     await tap(q('.full .foot .btn'));
     check(`${M}la cola se abre a pantalla completa con la siguiente`, await until(`!!${shown('.drawer')} && document.querySelectorAll('.drawer .qrow').length === 2 && document.querySelector('.drawer').getBoundingClientRect().width >= window.innerWidth`, 8000));
     await shot('m10_cola');
@@ -511,6 +556,20 @@ try {
     check(`${M}«atrás» cierra el reproductor y sigue en la lista`, await until(`!${shown('.full')} && ${text('.listhead h3')} === ${JSON.stringify(mList)}`, 5000));
     await js('history.back()');
     check(`${M}«atrás» vuelve a la pantalla anterior (Listas)`, await until(`${text('.main h3')} === 'Listas'`, 5000));
+
+    // «Me gusta»: la lista del corazón va la primera, con el corazón por carátula; dentro, la recién marcada arriba
+    check(`${M}la lista del corazón sale la primera, con el corazón por carátula`, await until(`document.querySelector('.main .rows .row')?.querySelector('.cv.like .ic')?.getClientRects().length > 0`, 8000));
+    await shot('m10b_listas_me_gusta');
+    await tap(`document.querySelector('.main .rows .row .t')`);
+    check(`${M}dentro, la canción recién marcada está arriba`, await until(`document.querySelector('.listhead .cv.like .ic')?.getClientRects().length > 0 && document.querySelector('.main .row[data-key]')?.classList.contains('on')`, 8000));
+    await tap(`document.querySelector('.main .row[data-key] .ib')`);
+    await until(`!!document.querySelector('.sheet .opt')`);
+    await shot('m10c_hoja_me_gusta');
+    const mUnlike = await js(`!!${byText('.sheet .opt', 'Quitar de «me gusta»')}`);
+    if (mUnlike) await tap(byText('.sheet .opt', 'Quitar de «me gusta»'));
+    check(`${M}la hoja de una canción marcada ofrece quitarla, y sale de la lista`, mUnlike && Boolean(await until(`${text('.toast')}.includes('Quitada de') && !document.querySelector('.main .row[data-key].on')`, 8000)), await js(text('.toast')));
+    await js('history.back()');
+    await until(`${text('.main h3')} === 'Listas'`, 5000);
 
     // Girar a una ventana ancha y volver: cambia de estructura sin romperse y sin cortar la música
     await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });

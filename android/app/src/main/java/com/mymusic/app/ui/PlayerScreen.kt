@@ -105,6 +105,12 @@ fun PlayerScreen(vm: AppViewModel, state: PlayerState) {
                 }
             }
             Spacer(Modifier.width(6.dp))
+            // «Me gusta»: junto al título, a la izquierda del botón de añadir a una lista (mockups/me-gusta-v1.html)
+            val liked = vm.isLiked(track)
+            Control(
+                if (liked) MmIcons.HeartFull else MmIcons.Heart, if (liked) "Quitar de «me gusta»" else "Me gusta", "playerLike",
+                tint = if (liked) Mm.Acc else Mm.Tx,
+            ) { vm.setLike(session?.current?.track ?: track, !liked) }
             // Una canción que puso la radio se guarda de un toque en la lista que suena; las demás, eligiendo lista
             Control(MmIcons.ListAdd, "Añadir a una lista", "playerAddToList") { if (fromRadio != null) vm.keepRadioTrack(fromRadio) else vm.pickFor = track }
         }

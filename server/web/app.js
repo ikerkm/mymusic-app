@@ -58,6 +58,11 @@ function cover(thumb, size, seed = '') {
     return img;
 }
 
+/** Carátula de una lista. La de «me gusta» lleva un corazón en vez de la imagen de su primera canción. */
+function listCover(list, size) {
+    return list.likes ? h('div', { class: `cv like ${size}` }, icon('heart', 'liked')) : cover(list.thumb, size, list.id);
+}
+
 const PLATFORMS = { youtube: ['yt', 'YouTube'], spotify: ['sp', 'Spotify'], soundcloud: ['sc', 'SoundCloud'] };
 function badge(platform) {
     const known = PLATFORMS[platform];
@@ -415,6 +420,12 @@ async function report() {
     }
 }
 
+// El corazón de la canción que suena, puesto al día con lo que dice el servidor (pudo cambiarse desde el móvil)
+function freshLike(session) {
+    const current = session?.window?.current?.track;
+    if (pl.track && current?.key === pl.key && typeof current.liked === 'boolean') pl.track.liked = current.liked;
+}
+
 /** Trae la vista de la sesión sin tocar el audio: si otro dispositivo la lleva, este se calla; si ha cambiado, se refleja. */
 async function syncSession() {
     if (!st.user || !pl.key || pl.displaced) return;
@@ -430,6 +441,7 @@ async function syncSession() {
     st.session = session;
     st.radio = session.radio?.enabled ?? st.radio;
     syncRadioChecks();
+    freshLike(session);
     updateBar();
     if (st.queue.open) refreshQueue();
 }
@@ -595,6 +607,43 @@ function markSaved(key) {
     renderQueue();
 }
 
+// ---------------------------------------------------------------- «me gusta»
+
+// El corazón mete la canción en la lista de «me gusta» del usuario (arriba del todo) o la saca. El
+// servidor dice de cada canción si está (`liked`), aunque esté por otra vía (Spotify, otro vídeo).
+
+/** Apunta el cambio en las canciones que ya hay en pantalla, sin esperar a volver a pedirlas. */
+function markLiked(key, liked) {
+    const hit = track => { if (track?.key === key) track.liked = liked; };
+    const win = st.session?.window;
+    for (const entry of [win?.prev, win?.current, win?.next, ...st.queue.entries]) hit(entry?.track);
+    for (const track of [pl.track, ...(st.list?.tracks ?? []), ...(st.search.results ?? []), ...st.recent, ...st.history]) hit(track);
+    updateBar();
+}
+
+async function setLike(track, liked) {
+    const reply = await api('PUT', '/likes', { track: bare(track), liked });
+    markLiked(track.key, reply.liked);
+    const name = reply.list?.name ?? 'me gusta';
+    toast(reply.liked ? (reply.added > 0 ? `Añadida a «${name}»` : `Ya estaba en «${name}»`) : `Quitada de «${name}»`);
+    if (reply.liked) markSaved(track.key);
+    await refreshLists();
+    if (st.view.name === 'list' && st.view.id === reply.list?.id) loadList(reply.list.id);
+    else if (st.view.name === 'lists' || st.view.name === 'home') renderMain();
+}
+const toggleLike = track => run(() => setLike(track, !track.liked), 'No se pudo cambiar el «me gusta». Prueba otra vez.');
+
+/** Botón del corazón del reproductor: relleno si la canción que suena está en «me gusta». */
+function likeButton() {
+    return h('button.ib.like.hidden', { type: 'button', title: 'Me gusta', onclick: () => pl.track && toggleLike(pl.track) }, icon('heart'));
+}
+function syncLikeButton(button, track) {
+    button.classList.toggle('hidden', !track);
+    button.classList.toggle('on', Boolean(track?.liked));
+    button.title = track?.liked ? 'Quitar de «me gusta»' : 'Me gusta';
+    button.setAttribute('aria-pressed', String(Boolean(track?.liked)));
+}
+
 // ---------------------------------------------------------------- datos
 
 async function refreshLists() {
@@ -606,6 +655,7 @@ async function refreshSession() {
         st.session = (await api('GET', '/session')).session;
         st.radio = st.session?.radio?.enabled ?? st.radio;
         syncRadioChecks();
+        freshLike(st.session);
     } catch { /* se queda la que había */ }
     updateBar();
 }
@@ -748,6 +798,7 @@ function trackMenu(track, { listId = null, play }) {
         { label: 'Reproducir a continuación', icon: 'next f', run: () => enqueue(track, 'next') },
         { label: 'Añadir a la cola', icon: 'queue', run: () => enqueue(track, 'end') },
         'sep',
+        { label: track.liked ? 'Quitar de «me gusta»' : 'Me gusta', icon: track.liked ? 'heart liked' : 'heart', run: () => setLike(track, !track.liked) },
         { label: 'Añadir a una lista…', icon: 'listadd', run: () => pickList(track) },
     ];
     if (track.key.startsWith('sp:')) items.push({ label: 'Cambiar coincidencia…', icon: 'swap', run: () => openMatch(track) });
@@ -784,7 +835,7 @@ function pickList(track) {
                 run(async () => addToList((await api('POST', '/lists', { name })).list, track), 'No se pudo crear la lista.');
             } }, h('div.tx', null, h('b', { class: 'auto' }, '+ Nueva lista…'))),
             st.lists.map(list => h('button.pick', { type: 'button', onclick: () => { close(); run(() => addToList(list, track)); } },
-                cover(list.thumb, 's34', list.id),
+                listCover(list, 's34'),
                 h('div.tx', null, h('b', null, list.name), h('small', null, songs(list.count)))))),
         h('div.acts', null, h('button.btn', { type: 'button', onclick: close }, 'Cancelar')),
     ]);
@@ -1164,6 +1215,7 @@ function buildFull() {
     f.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: next }, icon('next', 'f'));
     f.repeat = h('button.ib', { type: 'button', title: 'Repetir', onclick: () => run(cycleRepeat) }, icon('repeat'));
     f.count = h('span.mut');
+    f.like = likeButton();
     // «Reproducir» no entra en este menú: la canción ya suena, y pedirla suelta cortaría la lista
     const more = () => pl.track && openMenu(0, 0, trackMenu(pl.track, { play: () => {} }).slice(1), pl.track);
     f.el = h('div.full.hidden', { role: 'dialog' },
@@ -1174,6 +1226,7 @@ function buildFull() {
         h('div.art', null, f.cover),
         h('div.meta', null,
             h('div.tx', null, f.title, f.artist),
+            f.like,
             h('button.ib', { type: 'button', title: 'Añadir a una lista', onclick: () => pl.track && (fromRadio(pl.track) ? run(() => keepRadioTrack(pl.track)) : pickList(pl.track)) }, icon('listadd'))),
         f.seek,
         h('div.times', null, f.cur, f.dur),
@@ -1238,13 +1291,14 @@ function buildBar() {
     } }, h('div', null, b.fill));
     b.queue = h('button.ib', { type: 'button', title: 'Cola', onclick: toggleQueue }, icon('queue'));
     b.keep = h('button.ib.keep.hidden', { type: 'button', title: 'Añadir a una lista', onclick: () => pl.track && run(() => keepRadioTrack(pl.track)) }, icon('plus'));
+    b.like = likeButton();
     b.volume = h('input.vol', { type: 'range', min: 0, max: 100, title: 'Volumen', oninput: event => {
         audio.volume = Number(event.target.value) / 100;
         try { localStorage.setItem('mm.volume', String(audio.volume)); } catch { /* sin almacenamiento */ }
     } });
     b.volume.value = String(Math.round(audio.volume * 100));
     b.el = h('footer.player', null,
-        h('div.now', null, b.cover, h('div.tx', null, b.title, b.sub), b.keep),
+        h('div.now', null, b.cover, h('div.tx', null, b.title, b.sub), b.like, b.keep),
         h('div.ctl', null,
             h('div.bts', null, b.shuffle, b.prev, b.play, b.next, b.repeat),
             h('div.prog', null, b.cur, b.seek, b.dur)),
@@ -1273,6 +1327,8 @@ function updateBar() {
             .filter(Boolean).join(' · '));
     b.keep.classList.toggle('hidden', !fromRadio(track));
     b.keep.title = keepTitle();
+    syncLikeButton(b.like, track);
+    syncLikeButton(ui.full.like, track);
     const playing = !audio.paused;
     b.playIcon.replaceChildren(icon(playing ? 'pause' : 'play', 'f'));
     b.play.title = playing ? 'Pausar' : 'Reproducir';
@@ -1354,7 +1410,7 @@ function renderSide() {
         h('h4', null, 'Tus listas', h('button', { type: 'button', title: 'Nueva lista', onclick: () => run(createList, 'No se pudo crear la lista.') }, '+')),
         h('div.pls', null, st.lists.map(list => h('button.pl', {
             type: 'button', class: view.name === 'list' && view.id === list.id ? 'on' : '', onclick: () => go({ name: 'list', id: list.id }),
-        }, h('span', null, list.name), h('small', null, String(list.count))))),
+        }, list.likes && icon('heart', 'liked sm'), h('span', null, list.name), h('small', null, String(list.count))))),
         h('button.who', { type: 'button', onclick: openSettings }, h('b', null, (st.user?.name ?? '?').slice(0, 1)), `${st.user?.name ?? ''} · Ajustes`),
     );
 }
@@ -1526,7 +1582,7 @@ function viewHome() {
         st.lists.length > 0 && [
             h('div.sec', null, 'Tus listas'),
             h('div.cards', null, st.lists.map(list => h('button.card', { type: 'button', onclick: () => go({ name: 'list', id: list.id }) },
-                cover(list.thumb, '', list.id), h('b', null, list.name), h('small', null, songs(list.count))))),
+                listCover(list, ''), h('b', null, list.name), h('small', null, songs(list.count))))),
         ],
         st.recent.length > 0 && [
             h('div.sec', null, 'Escuchado hace poco', h('button', { type: 'button', onclick: () => go({ name: 'history' }) }, 'Ver todo')),
@@ -1612,7 +1668,7 @@ function viewLists() {
         h('div.top', null, h('h3', null, 'Listas')),
         st.lists.length === 0 ? h('p.empty', null, 'Todavía no tienes listas. Crea la primera con «Nueva lista».')
             : h('div.rows', null, st.lists.map(list => h('div.row', { onclick: () => go({ name: 'list', id: list.id }) },
-                cover(list.thumb, 's48', list.id),
+                listCover(list, 's48'),
                 h('div.t', null, h('b', null, list.name),
                     h('small', null, [songs(list.count), list.durationSec ? fmtTotal(list.durationSec) : null].filter(Boolean).join(' · '))),
                 h('button.ib', { type: 'button', title: 'Más', onclick: event => { event.stopPropagation(); openMenu(0, 0, listMenu(list)); } }, icon('more', 'f'))))),
@@ -1636,7 +1692,7 @@ function viewList() {
             h('span.grow'),
             h('button.ib', { type: 'button', title: 'Más', onclick: more }, icon('more', 'f'))),
         h('div.listhead', null,
-            cover(summary.thumb, 's110', summary.id),
+            listCover(summary, 's110'),
             h('div.info', null,
                 h('div.kind', null, 'Lista'),
                 h('h3', null, summary.name),

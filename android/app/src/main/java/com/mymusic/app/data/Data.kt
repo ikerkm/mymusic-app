@@ -27,6 +27,8 @@ data class Track(
     val match: String? = null,
     /** La puso la radio y el usuario aún no la ha guardado en una lista (Fase 4). Solo viene dentro de una sesión. */
     val radio: Boolean = false,
+    /** Está en la lista de «me gusta» del usuario (aunque sea por otra vía: de Spotify, o en otro vídeo). */
+    val liked: Boolean = false,
 )
 
 /** Lo que trae una playlist de fuera, antes de confirmar que se añade a una lista propia. */
@@ -49,7 +51,11 @@ data class MatchInfo(val currentKey: String?, val auto: Boolean, val candidates:
 /** Resultado del buscador. `hint` avisa de que lo pegado era una lista ("playlist") o un enlace no reconocido ("bad_link"). */
 data class SearchResponse(val results: List<Track>, val hint: String?)
 
-data class ListSummary(val id: String, val name: String, val count: Int, val durationSec: Int, val thumb: String?)
+/** `likes`: es la lista de «me gusta» del usuario, a la que va el corazón. */
+data class ListSummary(val id: String, val name: String, val count: Int, val durationSec: Int, val thumb: String?, val likes: Boolean = false)
+
+/** Lo que responde el servidor al marcar o quitar un «me gusta». `changed`: canciones que entraron o salieron. */
+data class LikeResult(val liked: Boolean, val changed: Int, val list: ListSummary?)
 
 data class ListDetail(val summary: ListSummary, val tracks: List<Track>)
 
@@ -133,6 +139,7 @@ private fun JSONObject.toTrack() = Track(
     platform = optString("platform", "youtube"),
     match = str("match"),
     radio = optBoolean("radio") && !optBoolean("saved"),
+    liked = optBoolean("liked"),
 )
 
 private fun Track.toJson(): JSONObject = JSONObject()
@@ -141,7 +148,7 @@ private fun Track.toJson(): JSONObject = JSONObject()
 
 private fun JSONArray.tracks(): List<Track> = List(length()) { getJSONObject(it).toTrack() }
 
-private fun JSONObject.toSummary() = ListSummary(getString("id"), getString("name"), getInt("count"), optInt("durationSec"), str("thumb"))
+private fun JSONObject.toSummary() = ListSummary(getString("id"), getString("name"), getInt("count"), optInt("durationSec"), str("thumb"), optBoolean("likes"))
 
 private fun JSONObject.entry(name: String): Entry? =
     if (isNull(name)) null else getJSONObject(name).let { Entry(it.getInt("index"), it.getJSONObject("track").toTrack()) }
@@ -284,6 +291,18 @@ class Api(private val prefs: Prefs) {
     suspend fun moveInList(id: String, key: String, toIndex: Int) {
         call("POST", "/api/lists/$id/move", JSONObject().put("key", key).put("toIndex", toIndex))
     }
+
+    // --- «Me gusta» ---
+
+    /** El corazón: mete la canción en la lista de «me gusta» del usuario (arriba del todo) o la saca. */
+    suspend fun setLike(track: Track, liked: Boolean): LikeResult =
+        call("PUT", "/api/likes", JSONObject().put("track", track.toJson()).put("liked", liked)).let {
+            LikeResult(
+                liked = it.optBoolean("liked"),
+                changed = if (it.has("added")) it.optInt("added") else it.optInt("removed"),
+                list = if (it.isNull("list")) null else it.getJSONObject("list").toSummary(),
+            )
+        }
 
     // --- Sesión de escucha ---
 

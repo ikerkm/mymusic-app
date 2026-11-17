@@ -42,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -68,12 +69,12 @@ private fun SheetWindowFix() {
 }
 
 @Composable
-private fun Option(icon: ImageVector, label: String, tag: String = "", onClick: () -> Unit) {
+private fun Option(icon: ImageVector, label: String, tag: String = "", tint: Color = Mm.Mut, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 13.dp, horizontal = 2.dp).testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = Mm.Mut, modifier = Modifier.size(20.dp))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Text(label, color = Mm.Tx, fontSize = 14.sp)
     }
@@ -115,6 +116,12 @@ fun TrackSheet(vm: AppViewModel, target: SheetTarget) {
             Option(MmIcons.Queue, "Añadir a la cola", "optQueue") {
                 close()
                 vm.addToQueue(track)
+            }
+            // «Me gusta», justo encima de «Añadir a una lista…»; si ya está, ofrece quitarla
+            val liked = vm.isLiked(track)
+            Option(if (liked) MmIcons.HeartFull else MmIcons.Heart, if (liked) "Quitar de «me gusta»" else "Me gusta", "optLike", tint = if (liked) Mm.Acc else Mm.Mut) {
+                close()
+                vm.setLike(track, !liked)
             }
             Option(MmIcons.ListAdd, "Añadir a una lista…", "optAddToList") {
                 close()
@@ -313,7 +320,7 @@ fun ListPickerSheet(vm: AppViewModel, track: Track) {
                         }.padding(vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Cover(list.thumb, 40.dp)
+                        ListCover(list, 40.dp)
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(list.name, color = Mm.Tx, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -169,7 +169,7 @@ private fun ListTile(list: ListSummary, modifier: Modifier, onClick: () -> Unit)
         modifier.clip(RoundedCornerShape(10.dp)).background(Mm.Sur).clickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Cover(list.thumb, 46.dp, radius = 0.dp)
+        ListCover(list, 46.dp, radius = 0.dp)
         Text(
             list.name, color = Mm.Tx, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 8.dp),

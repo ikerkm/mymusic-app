@@ -2,7 +2,8 @@ import express from 'express';
 import { once } from 'node:events';
 import { sniffMime } from './audio.js';
 import { sessionCookie } from './auth.js';
-import { ListStore, cleanTrack } from './lists.js';
+import { LikeSet } from './likes.js';
+import { cleanTrack } from './lists.js';
 import { RADIO_SEEDS, SongSet } from './radio.js';
 import { parseKey, parseLink } from './sources.js';
 import { explain } from './ytdlp.js';
@@ -73,6 +74,21 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         return source.platform === 'spotify' ? matches?.get(source.key)?.yt?.key ?? null : source.key;
     };
 
+    // «Me gusta»: las canciones de la lista del corazón de un usuario
+    const likesOf = ctx => {
+        const id = ctx.lists.likesId();
+        return new LikeSet(id ? ctx.lists.get(id)?.tracks ?? [] : [], audioKeyOf);
+    };
+    // Cómo se enseña una canción a un usuario: como `show`, más `liked` (si está en su «me gusta»).
+    // La lista del corazón solo se lee si llega a hacer falta.
+    const showFor = ctx => {
+        let likes = null;
+        return track => {
+            likes ??= likesOf(ctx);
+            return { ...show(track), liked: likes.has(track) };
+        };
+    };
+
     app.get('/api/health', (req, res) => res.json({ ok: true }));
 
     // Entrar con usuario y contraseña. Sin usuario se entiende el dueño: es lo que mandan las
@@ -126,26 +142,27 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     app.get('/api/search', requireAuth, async (req, res) => {
         const query = String(req.query.q ?? '').trim().slice(0, 300);
         if (!query) return res.status(400).json({ error: 'empty_query' });
+        const shown = showFor(stores.for(req.user.id));
         try {
             // Un enlace pegado en el buscador: una canción suelta se devuelve como resultado único;
             // una lista no se abre aquí (se importa desde dentro de una lista propia).
             const link = importers ? await followShort(parseLink(query)) : null;
             if (link?.kind === 'sc-track') {
                 const track = cleanTrack(await importers.soundcloudTrack(link));
-                return res.json({ results: track ? [track] : [] });
+                return res.json({ results: track ? [shown(track)] : [] });
             }
             if (link?.kind === 'yt-video') {
                 const track = await importers.youtubeVideo(link.id);
-                return res.json({ results: track ? [track] : [] });
+                return res.json({ results: track ? [shown(track)] : [] });
             }
             if (link?.kind === 'sp-track') {
                 const track = cleanTrack(await importers.spotifyTrack(link.id));
                 if (track) matches.remember([track]);
-                return res.json({ results: track ? [show(track)] : [] });
+                return res.json({ results: track ? [shown(track)] : [] });
             }
             if (link) return res.json({ results: [], hint: 'playlist' });
             if (/^https?:\/\//i.test(query)) return res.json({ results: [], hint: 'bad_link' });
-            res.json({ results: await search(query) });
+            res.json({ results: (await search(query)).map(shown) });
         } catch (error) {
             log(`[search] error: ${error.message}`);
             res.status(502).json({ error: 'search_failed' });
@@ -267,19 +284,19 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     priv.post('/lists', (req, res) => {
         const list = req.ctx.lists.create(req.body?.name);
         if (!list) return res.status(400).json({ error: 'bad_name' });
-        res.status(201).json({ list: ListStore.summary(list) });
+        res.status(201).json({ list: req.ctx.lists.summaryOf(list) });
     });
 
     priv.get('/lists/:id', (req, res) => {
         const list = listOr404(req, res);
-        if (list) res.json({ list: { ...ListStore.summary(list), tracks: list.tracks.map(show) } });
+        if (list) res.json({ list: { ...req.ctx.lists.summaryOf(list), tracks: list.tracks.map(showFor(req.ctx)) } });
     });
 
     const renameList = (req, res) => {
         if (!listOr404(req, res)) return;
         const list = req.ctx.lists.rename(req.params.id, req.body?.name);
         if (!list) return res.status(400).json({ error: 'bad_name' });
-        res.json({ list: ListStore.summary(list) });
+        res.json({ list: req.ctx.lists.summaryOf(list) });
     };
     priv.patch('/lists/:id', renameList);
     priv.put('/lists/:id', renameList);      // alias de PATCH, por lo mismo que en /session
@@ -297,21 +314,21 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         const { added, list } = req.ctx.lists.addTracks(req.params.id, [track]);
         // Si era una canción que puso la radio, al guardarla deja de ser «de la radio»
         req.ctx.sessions.markSaved(track.key);
-        res.json({ added, list: ListStore.summary(list) });
+        res.json({ added, list: req.ctx.lists.summaryOf(list) });
     });
 
     priv.delete('/lists/:id/tracks/:key', (req, res) => {
         if (!listOr404(req, res)) return;
         const list = req.ctx.lists.removeTrack(req.params.id, req.params.key);
         if (!list) return res.status(404).json({ error: 'track_not_found' });
-        res.json({ list: ListStore.summary(list) });
+        res.json({ list: req.ctx.lists.summaryOf(list) });
     });
 
     priv.post('/lists/:id/move', (req, res) => {
         if (!listOr404(req, res)) return;
         const list = req.ctx.lists.moveTrack(req.params.id, req.body?.key, req.body?.toIndex);
         if (!list) return res.status(400).json({ error: 'bad_move' });
-        res.json({ list: ListStore.summary(list) });
+        res.json({ list: req.ctx.lists.summaryOf(list) });
     });
 
     // --- Sesión de escucha ---
@@ -445,15 +462,15 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     // Una sesión por usuario, compartida entre sus dispositivos (D35), pero solo uno la lleva a la
     // vez: el último que empezó a reproducir o pidió continuar. `active` le dice a cada dispositivo
     // si es él; a los demás, avanzar o informar de su posición se les rechaza (409).
-    const entryShown = entry => (entry ? { index: entry.index, track: show(entry.track) } : null);
-    const viewShown = (req, view) => (view ? {
+    const entryShown = shown => entry => (entry ? { index: entry.index, track: shown(entry.track) } : null);
+    const viewShown = (req, view, entry = entryShown(showFor(req.ctx))) => (view ? {
         ...view,
         device: undefined,
         active: !view.device || view.device === req.device.id,
         radio: radioState(req.user.id),
         // Si la lleva otro dispositivo del usuario, cuál («estaba sonando en tu Pocophone»)
         deviceName: view.device && view.device !== req.device.id ? auth.deviceName(req.user.id, view.device) : null,
-        window: { prev: entryShown(view.window.prev), current: entryShown(view.window.current), next: entryShown(view.window.next) },
+        window: { prev: entry(view.window.prev), current: entry(view.window.current), next: entry(view.window.next) },
     } : null);
     const otherDevice = req => {
         const holder = req.ctx.sessions.view()?.device;
@@ -538,7 +555,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     priv.get('/session/queue', (req, res) => {
         const queue = req.ctx.sessions.queue(int(req.query.from), int(req.query.limit));
         if (!queue) return res.status(404).json({ error: 'no_session' });
-        res.json({ ...queue, entries: queue.entries.map(entryShown) });
+        res.json({ ...queue, entries: queue.entries.map(entryShown(showFor(req.ctx))) });
     });
 
     priv.post('/session/queue', (req, res) => {
@@ -583,7 +600,32 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             const seen = new Set();
             entries = entries.filter(e => !seen.has(e.track.key) && seen.add(e.track.key)).slice(0, limit);
         }
-        res.json({ entries: entries.map(entry => ({ ...entry, track: show(entry.track) })) });
+        const shown = showFor(req.ctx);
+        res.json({ entries: entries.map(entry => ({ ...entry, track: shown(entry.track) })) });
+    });
+
+    // --- «Me gusta» ---
+    // El corazón mete la canción en la lista de «me gusta» del usuario, arriba del todo, o la saca
+    // (a la papelera, como cualquier canción quitada). La lista es una lista normal: la primera vez
+    // se adopta una que ya se llame así («likes», «me gusta»…) y, si no hay, se crea.
+    priv.put('/likes', (req, res) => {
+        const track = trackFrom(req.body?.track);
+        if (!track) return res.status(400).json({ error: 'bad_track' });
+        if (typeof req.body?.liked !== 'boolean') return res.status(400).json({ error: 'bad_request' });
+        const { lists, sessions } = req.ctx;
+        if (req.body.liked) {
+            const id = lists.likesId({ create: true });
+            // La misma canción por otra vía (de Spotify, o en otro vídeo) ya cuenta: no se duplica
+            const { added, list } = likesOf(req.ctx).has(track) ? { added: 0, list: lists.get(id) } : lists.addTracks(id, [track], { top: true });
+            // Si era una canción que puso la radio, al guardarla deja de ser «de la radio»
+            sessions.markSaved(track.key);
+            return res.json({ liked: true, added, list: lists.summaryOf(list) });
+        }
+        const id = lists.likesId();
+        let removed = 0;
+        // Si está más de una vez (por Spotify y por YouTube), salen todas
+        for (let key; id && removed < 10 && (key = likesOf(req.ctx).find(track)); removed++) lists.removeTrack(id, key);
+        res.json({ liked: false, removed, list: id ? lists.summaryOf(lists.get(id)) : null });
     });
 
     // --- Fase 3: importar una playlist de fuera a una lista propia ---
@@ -698,7 +740,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         if (!ready || ready.listId !== list.id || ready.userId !== req.user.id) return res.status(410).json({ error: 'import_expired' });
         matches.remember(ready.tracks);
         const { added, list: updated } = req.ctx.lists.addTracks(list.id, ready.tracks);
-        res.json({ added, list: ListStore.summary(updated) });
+        res.json({ added, list: req.ctx.lists.summaryOf(updated) });
     });
 
     // --- Fase 3: coincidencia en YouTube de una canción de Spotify ---
@@ -737,7 +779,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         else if (type === 'track' && typeof id === 'string') result = req.ctx.lists.restoreTrack(id, typeof listId === 'string' ? listId : null);
         if (result.error) return res.status({ not_found: 404, bad_request: 400 }[result.error] ?? 409).json({ error: result.error });
         log(`[papelera] ${req.user.name} restaura ${type === 'list' ? 'la lista' : 'una canción en'} «${result.list.name}»`);
-        res.json({ ok: true, added: result.added ?? null, list: ListStore.summary(result.list) });
+        res.json({ ok: true, added: result.added ?? null, list: req.ctx.lists.summaryOf(result.list) });
     });
 
     // --- Fase 4: «Probar extracción» (Ajustes) ---

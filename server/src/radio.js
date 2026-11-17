@@ -26,12 +26,12 @@ const MIN_SEC = 60;
 const MAX_SEC = 600;
 const MAX_ROUNDS = 3;                    // veces que se amplía con más semillas si no salen suficientes
 
-const plain = text => String(text ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
+export const plain = text => String(text ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
 
 // Palabras que distinguen vídeos, no canciones
-const NOISE = /\b(official|oficial|video ?clip|video|music|audio|lyrics?|letra|con letra|hd|hq|4k|8k|remaster(ed|izado|izada)?|visuali[sz]er|mv|explicit|clean|version|full|original|high quality|upgrade)\b/g;
+export const NOISE = /\b(official|oficial|video ?clip|video|music|audio|lyrics?|letra|con letra|hd|hq|4k|8k|remaster(ed|izado|izada)?|visuali[sz]er|mv|explicit|clean|version|full|original|high quality|upgrade)\b/g;
 
-const artistSig = text => plain(text)
+export const artistSig = text => plain(text)
     .replace(/\s+-\s+topic$/, '')
     .replace(/\b(vevo|official|oficial|music|records|tv|channel)\b/g, '')
     .replace(/vevo$/, '')

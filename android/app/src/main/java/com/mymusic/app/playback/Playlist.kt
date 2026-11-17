@@ -17,6 +17,7 @@ import com.mymusic.app.data.Track
 object Playlist {
     private const val X_DURATION = "mm.durationSec"
     private const val X_PLATFORM = "mm.platform"
+    private const val X_LIKED = "mm.liked"
 
     /**
      * @param streamBase dirección del servidor. Solo la pone el servicio; cuando el elemento sale de la
@@ -26,6 +27,7 @@ object Playlist {
         val extras = Bundle().apply {
             putInt(X_DURATION, track.durationSec ?: 0)
             putString(X_PLATFORM, track.platform)
+            putBoolean(X_LIKED, track.liked)
         }
         val builder = MediaItem.Builder()
             .setMediaId(track.key)
@@ -52,6 +54,8 @@ object Playlist {
             durationSec = meta.extras?.getInt(X_DURATION)?.takeIf { it > 0 },
             thumb = meta.artworkUri?.toString(),
             platform = meta.extras?.getString(X_PLATFORM) ?: "youtube",
+            // Lo que se sabía al cargarla; si cambia después, manda lo que diga la pantalla (AppViewModel.isLiked)
+            liked = meta.extras?.getBoolean(X_LIKED) ?: false,
         )
     }
 

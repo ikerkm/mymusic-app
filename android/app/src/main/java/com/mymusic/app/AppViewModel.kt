@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.FileProvider
@@ -15,6 +16,7 @@ import com.mymusic.app.data.ApiException
 import com.mymusic.app.data.AppRelease
 import com.mymusic.app.data.Entry
 import com.mymusic.app.data.ImportPreview
+import com.mymusic.app.data.LikeResult
 import com.mymusic.app.data.ListDetail
 import com.mymusic.app.data.ListSummary
 import com.mymusic.app.data.MatchInfo
@@ -147,6 +149,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var probe by mutableStateOf<ProbeState>(ProbeState.Idle)
         private set
 
+    // --- «Me gusta» ---
+    // Lo que se ha marcado o quitado en este dispositivo, por clave de canción. Solo hace falta para la
+    // canción que suena mientras la sesión aún no ha llegado (el reproductor no guarda ese dato al día).
+    private val likeChanges = mutableStateMapOf<String, Boolean>()
+
     private var lastKey: String? = null
     private var ticks = 0
     private var sessionRefresh: Job? = null
@@ -271,6 +278,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         matchFor = null
         matchInfo = null
         radioOn = false
+        likeChanges.clear()
         trash = null
         restoreFor = null
         probe = ProbeState.Idle
@@ -361,6 +369,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val found = api.search(text)
                 results = found.results
+                found.results.forEach { likeChanges.remove(it.key) }     // lo recién traído manda sobre lo apuntado aquí
                 searchHint = when (found.hint) {
                     "playlist" -> "Eso es el enlace de una lista. Para traerla, abre una lista tuya y pulsa Importar."
                     "bad_link" -> "No reconozco ese enlace. Valen los de canciones de YouTube, Spotify y SoundCloud."
@@ -451,6 +460,51 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val listId = view?.sourceId
         if (view?.sourceType == "list" && listId != null) addToList(ListSummary(listId, view.sourceName, 0, 0, null), track) else pickFor = track
     }
+
+    // ------------------------------------------------------------------ «me gusta»
+
+    /**
+     * ¿Está la canción en «me gusta»? Manda lo más reciente que se sabe: la sesión (que el servidor
+     * acaba de dar), después lo marcado en este dispositivo y, si no, lo que traía la canción.
+     */
+    fun isLiked(track: Track): Boolean {
+        val inSession = session?.let { listOfNotNull(it.current, it.prev, it.next) }?.firstOrNull { it.track.key == track.key }
+        return inSession?.track?.liked ?: likeChanges[track.key] ?: track.liked
+    }
+
+    // El cambio se apunta en las canciones que ya hay en pantalla, sin esperar a volver a pedirlas
+    private fun markLiked(songKey: String, value: Boolean) {
+        fun Track.marked() = if (key == songKey && liked != value) copy(liked = value) else this
+        fun Entry.marked() = if (track.key == songKey && track.liked != value) copy(track = track.copy(liked = value)) else this
+        likeChanges[songKey] = value
+        results = results.map { it.marked() }
+        recent = recent.map { it.marked() }
+        history = history.map { it.marked() }
+        openList = openList?.let { it.copy(tracks = it.tracks.map { track -> track.marked() }) }
+        session = session?.let { it.copy(prev = it.prev?.marked(), current = it.current?.marked(), next = it.next?.marked()) }
+        for (i in queue.indices) queue[i] = queue[i].marked()
+    }
+
+    /** El corazón: mete la canción en la lista de «me gusta» (arriba del todo) o la saca (a la papelera). */
+    fun setLike(track: Track, liked: Boolean) = run("No se pudo cambiar el «me gusta». Prueba otra vez.") {
+        val result: LikeResult = api.setLike(track, liked)
+        markLiked(track.key, result.liked)
+        val name = result.list?.name ?: "me gusta"
+        notice = when {
+            !result.liked -> "Quitada de «$name»"
+            result.changed > 0 -> "Añadida a «$name»"
+            else -> "Ya estaba en «$name»"
+        }
+        lists = api.lists()
+        val likesId = result.list?.id
+        if (likesId != null && openList?.summary?.id == likesId) openList = api.list(likesId)
+        // Guardada, deja de ser «de la radio»: la sesión y la cola lo reflejan
+        if (result.liked && track.radio) {
+            if (overlays.lastOrNull() == Overlay.Queue) loadQueue() else runCatching { api.session() }.getOrNull()?.let { session = it }
+        }
+    }
+
+    fun toggleLike(track: Track) = setLike(track, !isLiked(track))
 
     // ------------------------------------------------------------------ papelera y «Probar extracción» (Fase 4)
 
@@ -561,7 +615,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadList(id: String) {
         if (openList?.summary?.id != id) openList = null
-        run("No se pudo abrir la lista.") { openList = api.list(id) }
+        run("No se pudo abrir la lista.") { openList = api.list(id).also { detail -> detail.tracks.forEach { likeChanges.remove(it.key) } } }
     }
 
     fun addToList(list: ListSummary, track: Track) = run("No se pudo añadir.") {

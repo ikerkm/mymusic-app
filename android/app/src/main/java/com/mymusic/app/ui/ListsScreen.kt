@@ -112,7 +112,7 @@ fun ListsScreen(vm: AppViewModel) {
                     Modifier.fillMaxWidth().clickable { vm.open(Overlay.ListDetail(list.id)) }.padding(vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Cover(list.thumb, 48.dp)
+                    ListCover(list, 48.dp)
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(list.name, color = Mm.Tx, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -184,7 +184,7 @@ fun ListDetailScreen(vm: AppViewModel, id: String, state: PlayerState) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             item(key = "cabecera") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Cover(detail.summary.thumb, 76.dp, 14.dp)
+                    ListCover(detail.summary, 76.dp, 14.dp)
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text(detail.summary.name, color = Mm.Tx, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)

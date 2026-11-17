@@ -90,7 +90,8 @@ test('búsqueda', async () => {
     const s = await start();
     try {
         const res = await s.api('/api/search?q=amen%20break', { token: s.token });
-        assert.deepEqual(await res.json(), { results: [{ key: KEY, title: 'resultado de amen break' }] });
+        // `liked`: cada canción dice si está en el «me gusta» del usuario (test/likes.test.js)
+        assert.deepEqual(await res.json(), { results: [{ key: KEY, title: 'resultado de amen break', liked: false }] });
         assert.equal((await s.api('/api/search?q=', { token: s.token })).status, 400);
     } finally { await s.close(); }
 });
