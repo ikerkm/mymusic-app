@@ -268,6 +268,7 @@ const duration = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? 
 
 /** Pone en el reproductor la canción actual de la sesión, por el minuto que diga la sesión. */
 function load(view, { play = true } = {}) {
+    if (view?.id !== st.session?.id) failStreak = 0;      // otra sesión: los fallos seguidos empiezan de cero (§19)
     st.session = view;
     st.radio = view?.radio?.enabled ?? st.radio;
     const track = view?.window?.current?.track;
@@ -365,6 +366,12 @@ function next() {
     gotoKey(track.key);
 }
 
+// «Siguiente» pulsado por el usuario: los fallos seguidos empiezan de cero (el salto automático usa next)
+function userNext() {
+    failStreak = 0;
+    next();
+}
+
 function prev() {
     if (pl.displaced || !pl.key) return void resume();
     const track = st.session?.window?.prev?.track;
@@ -456,7 +463,7 @@ audio.addEventListener('loadedmetadata', () => {
     if (at > 1 && at < duration() - 5) audio.currentTime = at;
     updateProgress();
 });
-audio.addEventListener('playing', () => { pl.loading = false; pl.error = null; updateBar(); });
+audio.addEventListener('playing', () => { pl.loading = false; pl.error = null; failStreak = 0; updateBar(); });
 audio.addEventListener('waiting', () => { pl.loading = true; updateBar(); });
 audio.addEventListener('canplay', () => { pl.loading = false; updateBar(); });
 audio.addEventListener('play', () => updateBar());
@@ -464,16 +471,49 @@ audio.addEventListener('pause', () => { report(); updateBar(); });
 audio.addEventListener('ended', advance);
 audio.addEventListener('timeupdate', () => updateProgress());
 audio.addEventListener('durationchange', () => updateProgress());
+// Canciones que fallan (§19, mockups/fallos-v1.html): si el servidor no pudo sacar el audio (ya lo
+// reintentó él), aviso con el motivo y, a los 2 s, la siguiente. Dos frenos: sin conexión con el
+// servidor no salta (fallarían todas), y con 3 fallos seguidos se para.
+const SKIP_AFTER_MS = 2000;
+const MAX_FAILS = 3;
+let failStreak = 0;
+// «Tiene restricción de edad» → «tiene restricción de edad»; «YouTube rechazó…» se queda igual
+const lowerFirst = text => (/[A-ZÁÉÍÓÚÑ]/.test(text.split(' ')[0].slice(1)) ? text : text.charAt(0).toLowerCase() + text.slice(1));
 audio.addEventListener('error', async () => {
     if (!pl.key) return;
+    const key = pl.key;
+    const title = pl.track?.title ?? '';
     pl.loading = false;
     try {
         await api('GET', '/me');
     } catch (error) {
         if (error.status === 401) return;
+        if (error.status === 0) {
+            pl.error = 'Sin conexión con el servidor.';
+            return updateBar();
+        }
     }
-    pl.error = 'No se pudo reproducir esta canción.';
+    // El servidor apunta lo que no pudo sacar: si no hay nada reciente, es otra cosa (un corte de red a media canción)
+    const failure = await api('GET', `/failures/${enc(key)}`).then(reply => reply.failure).catch(() => null);
+    if (pl.key !== key) return;                  // mientras se preguntaba, ya suena otra
+    const recent = failure && Date.now() - Date.parse(failure.lastAt) < 120_000;
+    if (!recent) {
+        pl.error = 'No se pudo reproducir esta canción.';
+        return updateBar();
+    }
+    failStreak++;
+    const why = failure.reason ? ` (${lowerFirst(failure.reason)})` : '';
+    if (failStreak >= MAX_FAILS) {
+        pl.error = `Han fallado ${MAX_FAILS} seguidas. Parece un problema de YouTube o del servidor, así que me paro aquí.`;
+        toast(pl.error);
+        return updateBar();
+    }
+    const hasNext = Boolean(st.session?.window?.next) && st.session?.active !== false;
+    pl.error = `No se pudo reproducir${why}.${hasNext ? ' Paso a la siguiente.' : ''}`;
     updateBar();
+    if (!hasNext) return;
+    toast(`No se pudo reproducir «${title}»${why}. Paso a la siguiente.`);
+    setTimeout(() => { if (pl.key === key && pl.error) next(); }, SKIP_AFTER_MS);
 });
 
 // Mientras suena: el servidor sabe por dónde vamos, y se mira si otro dispositivo ha tomado la sesión
@@ -1193,6 +1233,128 @@ function openTrash() {
     });
 }
 
+// «hoy», «ayer» o «15 nov»
+function whenShort(iso) {
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return '';
+    const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const diff = Math.round((day(new Date()) - day(at)) / 86_400_000);
+    return diff === 0 ? 'hoy' : diff === 1 ? 'ayer' : shortDate(iso);
+}
+
+/**
+ * «Canciones que fallaron» (§19, pantallas 4-5 y 8 de mockups/fallos-v1.html): las que no se pudieron
+ * reproducir, con el motivo. «Probar» la pone a sonar; «Otro enlace…» elige otro vídeo (para todos);
+ * en los tres puntos, «Quitar de la lista» y «Descartar». Salen solas al volver a sonar bien.
+ */
+function openFailures() {
+    openModal((close, modal) => {
+        modal.classList.add('wide');           // pantalla 8: más ancha que las demás, para que se lea el motivo
+        const body = h('div.picks', null, h('p.note', null, 'Cargando…'));
+        async function fill() {
+            let reply;
+            try {
+                reply = await api('GET', '/failures');
+            } catch {
+                return body.replaceChildren(h('p.err', null, 'No se pudieron leer.'));
+            }
+            if (reply.failures.length === 0) return body.replaceChildren(h('p.note', null, 'Ninguna: todo lo que has escuchado ha sonado.'));
+            body.replaceChildren(...reply.failures.map(item => {
+                const track = item.track;
+                const why = [item.reason, item.count > 1 ? `${item.count} veces` : null, whenShort(item.lastAt)].filter(Boolean).join(' · ');
+                const probe = () => { close(); run(() => playTrack(track), 'No se pudo reproducir. Prueba otra vez.'); };
+                // En el escritorio, «Probar» y «Otro enlace…» van a la vista y los tres puntos traen el resto;
+                // en el móvil (pantalla 5), la fila abre una hoja con las cuatro opciones
+                const more = event => {
+                    event.stopPropagation();
+                    const box = event.currentTarget.getBoundingClientRect();
+                    const options = [
+                        mobile() && { label: 'Probar otra vez', icon: 'play f', run: probe },
+                        mobile() && { label: 'Poner otro enlace…', icon: 'swap', run: () => openAlternate(item, fill) },
+                        mobile() && 'sep',
+                        item.list && { label: `Quitar de «${item.list.name}»`, icon: 'bin', danger: true, run: async () => {
+                            await api('DELETE', `/lists/${item.list.id}/tracks/${enc(track.key)}`);
+                            await api('DELETE', `/failures/${enc(item.key)}`).catch(() => {});
+                            toast(`Quitada de «${item.list.name}»`);
+                            await Promise.all([fill(), refreshLists()]);
+                        } },
+                        { label: 'Descartar', icon: 'close', run: async () => {
+                            await api('DELETE', `/failures/${enc(item.key)}`);
+                            toast('Ya no sale aquí');
+                            await fill();
+                        } },
+                    ].filter(Boolean);
+                    openMenu(box.right - 210, box.bottom + 4, options, track);
+                };
+                return h('div.pick.fail', { onclick: event => { if (mobile()) more(event); } }, cover(track.thumb, 's34', track.key),
+                    h('div.tx', null, h('b', null, track.title),
+                        h('small', null, [track.artist, track.platform === 'spotify' ? 'Spotify' : null, item.list ? `de «${item.list.name}»` : null].filter(Boolean).join(' · ')),
+                        h('small.why', null, why)),
+                    h('button.btn.sm', { type: 'button', onclick: probe }, 'Probar'),
+                    h('button.btn.sm', { type: 'button', onclick: () => openAlternate(item, fill) }, 'Otro enlace…'),
+                    h('button.ib', { type: 'button', title: 'Más', onclick: more }, icon('more', 'f')));
+            }));
+        }
+        fill();
+        return [
+            h('h2', null, 'Canciones que fallaron'),
+            h('p.note', null, 'Las que no se pudieron reproducir. Salen solas de aquí cuando vuelven a sonar bien.'),
+            body,
+            h('div.acts', null, h('button.btn', { type: 'button', onclick: close }, 'Cerrar')),
+        ];
+    });
+}
+
+/** «Poner otro enlace» (pantalla 6): otros vídeos de la misma canción, o pegar un enlace. Vale para todos. */
+function openAlternate(item, refresh) {
+    openModal((close, modal) => {
+        const body = h('div.picks', null, h('p.note', null, 'Buscando en YouTube…'));
+        const done = async reply => {
+            close();
+            toast(`Ahora suena desde ${reply.current.title ? `«${reply.current.title}»` : 'ese vídeo'}`);
+            await refresh?.();
+        };
+        const choose = candidate => run(async () => done(await api('PUT', `/failures/${enc(item.key)}/link`, { track: bare(candidate) })), 'No se pudo cambiar.');
+        api('GET', `/failures/${enc(item.key)}/candidates`).then(info => {
+            if (!modal.isConnected) return;
+            if (!info.candidates?.length) return body.replaceChildren(h('p.note', null, 'No he encontrado otros vídeos de esta canción. Puedes pegar un enlace.'));
+            body.replaceChildren(...info.candidates.map(candidate => {
+                const failing = candidate.key === info.current;
+                const diff = candidate.durationDiff;
+                const detail = [candidate.artist, candidate.durationSec ? fmt(candidate.durationSec) : null,
+                    Number.isFinite(diff) && diff !== 0 ? `${diff > 0 ? '+' : '−'}${Math.abs(diff)} s` : null].filter(Boolean).join(' · ');
+                return h('button.pick', { type: 'button', class: failing ? 'failing' : '', onclick: () => choose(candidate) },
+                    cover(candidate.thumb, 's34', candidate.key), h('div.tx', null, h('b', null, candidate.title), h('small', null, detail)),
+                    failing && h('span.pill.badfail', null, 'falla'));
+            }));
+        }).catch(() => modal.isConnected && body.replaceChildren(h('p.err', null, 'No se pudo buscar. Prueba otra vez.')));
+        const link = h('input.in', { type: 'text', placeholder: 'https://youtu.be/…', autocomplete: 'off', spellcheck: false });
+        const message = h('div');
+        const use = h('button.btn.pri', { type: 'button', onclick: async () => {
+            const url = link.value.trim();
+            if (!url) return;
+            use.disabled = true;
+            try {
+                await done(await api('PUT', `/failures/${enc(item.key)}/link`, { url }, 60000));
+            } catch (error) {
+                use.disabled = false;
+                if (error.status !== 401) message.replaceChildren(h('p.err', null, error.code === 'bad_link' ? 'Pega el enlace de un vídeo de YouTube.' : 'No se pudo leer ese enlace.'));
+            }
+        } }, 'Usar');
+        link.addEventListener('keydown', event => { if (event.key === 'Enter') use.click(); });
+        return [
+            h('h2', null, 'Poner otro enlace'),
+            h('p.note', null, [item.track.title, item.track.artist].filter(Boolean).join(' — ')),
+            h('p.note', null, 'Suena desde el vídeo que elijas, en todas sus listas y para todos.'),
+            body,
+            h('div.sec', null, 'O pega un enlace de YouTube'),
+            h('div.linkrow', null, link, use),
+            message,
+            h('div.acts', null, h('button.btn', { type: 'button', onclick: close }, 'Cerrar')),
+        ];
+    });
+}
+
 /**
  * Consumo (solo el dueño): lo que gasta cada usuario, cómo está la máquina y cuántos oyentes a la
  * vez caben según lo medido. Son cantidades: aquí no se ve qué escucha nadie.
@@ -1229,12 +1391,14 @@ function openUsage() {
                     h('small', null, `Servido ${size(row.servedBytes)} · bajado ${size(row.extractBytes)} en ${num(row.extractions)} extracciones`),
                     h('small', null, `Procesador ${cpu(row)} · ${num(row.searches)} búsquedas · ${num(row.radioBatches)} de radio`)))));
             }
-            return h('table.usetable', null,
+            // Si no cabe (muchos usuarios o cifras largas), la tabla se desplaza de lado dentro de la ventana
+            return h('div.usewrap', null, h('table.usetable', null,
                 h('thead', null, h('tr', null, ['Usuario', 'Escuchado', 'Canciones', 'Servido', 'Extracciones', 'Bajado', 'Procesador', 'Búsquedas', 'Radio'].map((title, i) => h(i ? 'th.r' : 'th', null, title)))),
                 h('tbody', null, rows.map(row => h('tr', { class: row.total ? 'tot' : '' },
                     h('td', null, name(row)),
-                    [span(row.listenedMs), num(row.plays), size(row.servedBytes), num(row.extractions) + (row.extractFails ? ` (+${num(row.extractFails)} fallidas)` : ''),
-                        size(row.extractBytes), cpu(row), num(row.searches), num(row.radioBatches)].map(value => h('td.r', null, value))))));
+                    // Las fallidas, debajo y en pequeño: en la misma línea ensanchaban la columna y la tabla se salía de la ventana
+                    [span(row.listenedMs), num(row.plays), size(row.servedBytes), [num(row.extractions), row.extractFails ? h('small.fails', null, `+${num(row.extractFails)} fallidas`) : null],
+                        size(row.extractBytes), cpu(row), num(row.searches), num(row.radioBatches)].map(value => h('td.r', null, value)))))));
         };
 
         const fits = report => {
@@ -1308,6 +1472,14 @@ function openSettings() {
             const n = trash.lists.length + trash.tracks.length;
             trashInfo.textContent = n === 0 ? 'Vacía' : n === 1 ? '1 elemento recuperable' : `${n} elementos recuperables`;
         }).catch(() => {});
+        // Canciones que fallaron (§19): con su contador
+        const failInfo = h('small.sub', null, 'Las que no se pudieron reproducir');
+        const failCount = h('span.count.hidden');
+        api('GET', '/failures').then(({ count }) => {
+            failInfo.textContent = count === 0 ? 'Ninguna' : count === 1 ? '1 por revisar' : `${count} por revisar`;
+            failCount.textContent = String(count);
+            failCount.classList.toggle('hidden', count === 0);
+        }).catch(() => {});
         const field = (label, autocomplete) => {
             const input = h('input.in', { type: 'password', autocomplete });
             return [h('label', null, label), input, input];
@@ -1336,6 +1508,8 @@ function openSettings() {
             probeRow(),
             h('div.rowline', null, h('div', null, h('b', null, 'Papelera'), trashInfo),
                 h('button.btn', { type: 'button', onclick: () => { close(); openTrash(); } }, 'Abrir')),
+            h('div.rowline.failline', null, h('div', null, h('b', null, 'Canciones que fallaron'), failInfo), failCount,
+                h('button.btn', { type: 'button', onclick: () => { close(); openFailures(); } }, 'Abrir')),
             // Solo el dueño: cuánto gasta cada usuario y cuántos caben
             st.user?.admin && h('div.rowline', null, h('div', null, h('b', null, 'Consumo'), h('small.sub', null, 'Lo que gasta cada usuario y la máquina')),
                 h('button.btn', { type: 'button', onclick: () => { close(); openUsage(); } }, 'Ver')),
@@ -1382,7 +1556,7 @@ function buildMini() {
     m.sub = h('small');
     m.playIcon = h('span', null, icon('play', 'f'));
     m.play = h('button.ib', { type: 'button', title: 'Reproducir', onclick: event => { event.stopPropagation(); togglePlay(); } }, m.playIcon);
-    m.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: event => { event.stopPropagation(); next(); } }, icon('next', 'f'));
+    m.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: event => { event.stopPropagation(); userNext(); } }, icon('next', 'f'));
     m.fill = h('i');
     m.el = h('div.mini.hidden', { title: 'Abrir el reproductor', onclick: openFull }, m.cover, h('div.t', null, m.title, m.sub), m.play, m.next, m.fill);
     return m;
@@ -1404,7 +1578,7 @@ function buildFull() {
     f.prev = h('button.ib', { type: 'button', title: 'Anterior', onclick: prev }, icon('prev', 'f'));
     f.playIcon = h('span', null, icon('play', 'f'));
     f.play = h('button.big', { type: 'button', title: 'Reproducir', onclick: () => togglePlay() }, f.playIcon);
-    f.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: next }, icon('next', 'f'));
+    f.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: userNext }, icon('next', 'f'));
     f.repeat = h('button.ib', { type: 'button', title: 'Repetir', onclick: () => run(cycleRepeat) }, icon('repeat'));
     f.count = h('span.mut');
     f.like = likeButton();
@@ -1469,7 +1643,7 @@ function buildBar() {
     b.prev = h('button.ib', { type: 'button', title: 'Anterior', onclick: prev }, icon('prev', 'f'));
     b.playIcon = h('span', null, icon('play', 'f'));
     b.play = h('button.big', { type: 'button', title: 'Reproducir', onclick: () => togglePlay() }, b.playIcon);
-    b.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: next }, icon('next', 'f'));
+    b.next = h('button.ib', { type: 'button', title: 'Siguiente', onclick: userNext }, icon('next', 'f'));
     b.repeat = h('button.ib', { type: 'button', title: 'Repetir', onclick: () => run(cycleRepeat) }, icon('repeat'));
     b.cur = h('span', null, '0:00');
     b.dur = h('span', null, '0:00');

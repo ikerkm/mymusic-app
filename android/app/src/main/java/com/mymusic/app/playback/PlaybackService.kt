@@ -2,16 +2,21 @@ package com.mymusic.app.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -32,6 +37,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
 
 /**
  * Servicio de reproducción. Vive aparte de la pantalla: sigue sonando con la app cerrada o el
@@ -66,9 +72,20 @@ class PlaybackService : MediaSessionService() {
             spec.withAdditionalHeaders(mapOf("Authorization" to "Bearer ${prefs.token.orEmpty()}"))
         }
 
+        // Un 502 es que el servidor no pudo sacar el audio, y ya lo ha reintentado él: el reproductor no insiste
+        // (cada intento suyo era otra extracción en el servidor, y el aviso de «canciones que fallan» tardaba)
+        val noRetryOn502 = object : DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(info: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+                val failed = generateSequence(info.exception as Throwable?) { it.cause }.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
+                return if (failed?.responseCode == 502) C.TIME_UNSET else super.getRetryDelayMsFor(info)
+            }
+        }
         val player = ExoPlayer.Builder(this)
             // Saltar por estimación en los formatos sin índice (el AAC de SoundCloud llega en ADTS)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(authorized, DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)))
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(authorized, DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true))
+                    .setLoadErrorHandlingPolicy(noRetryOn502),
+            )
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)
@@ -82,6 +99,9 @@ class PlaybackService : MediaSessionService() {
 
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // Otra sesión, o «Siguiente» / «Anterior» pulsados por el usuario: los fallos seguidos empiezan de cero (§19)
+                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED || (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK && !autoSkipping)) failStreak = 0
+                autoSkipping = false
                 // Solo los cambios de canción de verdad: acaba la anterior (AUTO) o se pulsa siguiente/anterior (SEEK).
                 // Los cambios que hacemos nosotros en la lista (PLAYLIST_CHANGED) y la repetición no avanzan la sesión.
                 if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && reason != Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) return
@@ -90,8 +110,10 @@ class PlaybackService : MediaSessionService() {
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                if (!isPlaying) report(player)
+                if (isPlaying) clearFailure() else report(player)
             }
+
+            override fun onPlayerError(error: PlaybackException) = onFailure(player, error)
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 // Se acabó lo que había: con la radio, el servidor puede estar añadiendo la siguiente
@@ -157,6 +179,45 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun item(track: Track): MediaItem = Playlist.item(track, prefs.serverUrl.orEmpty())
+
+    // --- Canciones que fallan (§19, mockups/fallos-v1.html) ---
+    // Si el servidor no pudo sacar el audio (502; ya lo reintentó él), se avisa con el motivo y a los 2 s
+    // suena la siguiente. Lo hace el servicio y no la pantalla, para que funcione con el móvil bloqueado.
+    // Dos frenos: sin conexión con el servidor (u otro error) no se salta, porque fallarían todas; y con
+    // 3 fallos seguidos se para. La pantalla se entera por los «extras» de la sesión (FailureNotice).
+    private var failStreak = 0
+    private var autoSkipping = false
+    private var failurePublished = false
+
+    private fun onFailure(player: Player, error: PlaybackException) {
+        val http = generateSequence(error.cause) { it.cause }.filterIsInstance<HttpDataSource.InvalidResponseCodeException>().firstOrNull()
+        if (http?.responseCode != 502) return
+        val item = player.currentMediaItem ?: return
+        val key = item.mediaId
+        val reason = runCatching { JSONObject(String(http.responseBody)).optString("reason") }.getOrNull()?.takeIf { it.isNotBlank() }
+        failStreak++
+        val skip = failStreak < FailureNotice.MAX_FAILS && player.hasNextMediaItem()
+        failurePublished = true
+        session?.setSessionExtras(FailureNotice(key, item.mediaMetadata.title?.toString().orEmpty(), reason, failStreak, skip, System.currentTimeMillis()).toBundle())
+        if (!skip) return
+        scope.launch {
+            delay(FailureNotice.SKIP_AFTER_MS)
+            // Si mientras tanto el usuario ha tocado otra cosa, no se salta
+            if (player.currentMediaItem?.mediaId != key || player.playerError == null) return@launch
+            autoSkipping = true
+            player.seekToNextMediaItem()
+            player.prepare()
+            player.play()
+        }
+    }
+
+    // Suena: se olvida el aviso y los fallos seguidos
+    private fun clearFailure() {
+        failStreak = 0
+        if (!failurePublished) return
+        failurePublished = false
+        session?.setSessionExtras(Bundle.EMPTY)
+    }
 
     /** Si el servidor ya tiene canción siguiente y el reproductor no (la radio acaba de añadirla), se coloca. */
     private fun refreshWindow(player: Player) {

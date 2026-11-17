@@ -25,6 +25,7 @@ data class PlayerState(
     val hasNext: Boolean = false,
     val error: String? = null,
     val sessionExpired: Boolean = false,  // el servidor ha rechazado el token
+    val failure: FailureNotice? = null,   // canción que no se pudo reproducir (§19): el aviso o por qué se paró
 )
 
 /** Puente entre la pantalla y el servicio de reproducción. */
@@ -145,6 +146,8 @@ class PlayerConnection(private val context: Context) {
         val fallback = if (_state.value.track?.key == track.key) _state.value.durationMs else (track.durationSec ?: 0) * 1000L
         val duration = c.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: fallback
         val error = c.playerError
+        // El servicio cuenta las canciones que no se pudieron reproducir (§19): con el motivo, y si salta o se para
+        val failure = FailureNotice.from(c.sessionExtras)
         _state.value = PlayerState(
             track = track,
             wantsToPlay = c.playWhenReady && c.playbackState != Player.STATE_ENDED && c.playbackState != Player.STATE_IDLE,
@@ -152,8 +155,9 @@ class PlayerConnection(private val context: Context) {
             positionMs = c.currentPosition.coerceAtLeast(0),
             durationMs = duration,
             hasNext = c.hasNextMediaItem(),
-            error = error?.let(::describe),
+            error = if (error != null && failure?.key == track.key) failure.message else error?.let(::describe),
             sessionExpired = error?.httpStatus() == 401,
+            failure = failure,
         )
     }
 

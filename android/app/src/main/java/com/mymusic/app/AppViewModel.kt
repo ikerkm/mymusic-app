@@ -12,6 +12,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mymusic.app.data.AlbumPage
+import com.mymusic.app.data.AlternateOptions
 import com.mymusic.app.data.Api
 import com.mymusic.app.data.ApiException
 import com.mymusic.app.data.AppRelease
@@ -21,6 +22,7 @@ import com.mymusic.app.data.ArtistSongs
 import com.mymusic.app.data.AutoDetail
 import com.mymusic.app.data.AutoHome
 import com.mymusic.app.data.Entry
+import com.mymusic.app.data.FailureItem
 import com.mymusic.app.data.ImportPreview
 import com.mymusic.app.data.LikeResult
 import com.mymusic.app.data.ListDetail
@@ -34,6 +36,7 @@ import com.mymusic.app.data.Track
 import com.mymusic.app.data.Trash
 import com.mymusic.app.data.TrashedList
 import com.mymusic.app.data.TrashedTrack
+import com.mymusic.app.playback.FailureNotice
 import com.mymusic.app.playback.PlayerConnection
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -64,6 +67,8 @@ sealed interface Overlay {
     /** «Ver todos»: la discografía; `tab` = albums | singles. */
     data class Discography(val id: String, val tab: String) : Overlay
     data class Album(val id: String) : Overlay
+    /** «Canciones que fallaron» (§19), desde Ajustes. */
+    data object Failures : Overlay
 }
 
 /** En qué punto está la actualización de la app. */
@@ -201,6 +206,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var artistRadioStarting by mutableStateOf<String?>(null)           // id del artista cuya radio se está buscando
         private set
 
+    // --- Canciones que fallan (§19, mockups/fallos-v1.html) ---
+    var failures by mutableStateOf<List<FailureItem>?>(null)          // null = aún sin leer
+        private set
+    var failureFor by mutableStateOf<FailureItem?>(null)              // la que tiene abiertas sus opciones (pantalla 5)
+    var alternateFor by mutableStateOf<FailureItem?>(null)            // «Poner otro enlace» (pantalla 6)
+        private set
+    var alternateOptions by mutableStateOf<AlternateOptions?>(null)
+        private set
+    var alternateError by mutableStateOf<String?>(null)
+        private set
+    private var lastFailureAt = 0L
+
     // --- «Me gusta» ---
     // Lo que se ha marcado o quitado en este dispositivo, por clave de canción. Solo hace falta para la
     // canción que suena mientras la sesión aún no ha llegado (el reproductor no guarda ese dato al día).
@@ -233,6 +250,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 player.sync()
                 val state = player.state.value
                 if (state.sessionExpired && loggedIn) logout(EXPIRED)
+                // Una canción no se pudo reproducir (§19): el servicio salta solo; aquí, el aviso con el motivo
+                state.failure?.let { failure ->
+                    if (failure.at != lastFailureAt) {
+                        lastFailureAt = failure.at
+                        if (failure.skipping || failure.streak >= FailureNotice.MAX_FAILS) notice = failure.message
+                        if (failures != null) loadFailures()
+                    }
+                }
                 val key = state.track?.key
                 if (loggedIn && key != lastKey) {
                     lastKey = key
@@ -347,6 +372,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         pageErrors.clear()
         artistChoice = null
         saveAlbumFor = null
+        failures = null
+        failureFor = null
+        alternateFor = null
+        alternateOptions = null
         loginError = message
         loggedIn = false
     }
@@ -359,7 +388,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is Overlay.ListDetail -> loadList(overlay.id)
             Overlay.Queue -> loadQueue()
             Overlay.History -> run { history = api.history(100, distinct = false) }
-            Overlay.Settings, Overlay.Trash -> loadTrash()       // en Ajustes, para decir cuánto hay en la papelera
+            Overlay.Settings -> {                                  // en Ajustes, para decir cuánto hay en la papelera y cuántas fallaron
+                loadTrash()
+                loadFailures()
+            }
+            Overlay.Trash -> loadTrash()
+            Overlay.Failures -> loadFailures()
             Overlay.Player -> Unit
             is Overlay.AutoList -> loadAuto(overlay.kind)
             Overlay.Stats -> loadStats("7")                       // se abre siempre en «7 días»
@@ -583,6 +617,77 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: ApiException) {
                 if (e.status == 401) logout(EXPIRED)
                 done(if (e.error == "bad_name") "Ponle un nombre a la lista." else "No se pudo guardar la lista (${e.status}).")
+            } catch (e: Exception) {
+                done("Sin conexión con el servidor.")
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ canciones que fallaron (§19)
+
+    fun loadFailures() = run("No se pudieron leer las canciones que fallaron.") { failures = api.failures() }
+
+    /** «Probar otra vez»: la pone a sonar. Si suena, el servidor la quita del apartado. */
+    fun retryFailure(item: FailureItem) {
+        failureFor = null
+        playTrack(item.track)
+    }
+
+    /** «Descartar»: deja de salir aquí, sin tocar nada más. */
+    fun dismissFailure(item: FailureItem) = run("No se pudo descartar.") {
+        failureFor = null
+        api.dismissFailure(item.key)
+        failures = failures?.filterNot { it.key == item.key }
+        notice = "Ya no sale aquí"
+    }
+
+    /** «Quitar de la lista»: a la papelera, como siempre, y fuera del apartado. */
+    fun removeFailureFromList(item: FailureItem) = run("No se pudo quitar.") {
+        val list = item.list ?: return@run
+        failureFor = null
+        api.removeFromList(list.id, item.track.key)
+        runCatching { api.dismissFailure(item.key) }
+        failures = failures?.filterNot { it.key == item.key }
+        lists = api.lists()
+        notice = "Quitada de «${list.name}»"
+    }
+
+    /** «Poner otro enlace…» (pantalla 6): busca otros vídeos de la misma canción. */
+    fun openAlternate(item: FailureItem) {
+        failureFor = null
+        alternateFor = item
+        alternateOptions = null
+        alternateError = null
+        viewModelScope.launch {
+            try {
+                val options = api.failureCandidates(item.key)
+                if (alternateFor?.key == item.key) alternateOptions = options
+            } catch (e: Exception) {
+                if (e is ApiException && e.status == 401) return@launch logout(EXPIRED)
+                if (alternateFor?.key == item.key) alternateError = "No se pudo buscar. Puedes pegar un enlace."
+            }
+        }
+    }
+
+    fun closeAlternate() {
+        alternateFor = null
+        alternateOptions = null
+        alternateError = null
+    }
+
+    /** Elegir un vídeo (`track`) o pegar un enlace (`url`). Vale para todos. `done` recibe null o el error. */
+    fun setAlternate(track: Track? = null, url: String? = null, done: (String?) -> Unit = {}) {
+        val item = alternateFor ?: return
+        viewModelScope.launch {
+            try {
+                val title = api.setFailureLink(item.key, track, url)
+                closeAlternate()
+                done(null)
+                failures = failures?.filterNot { it.key == item.key }
+                notice = if (title.isNotBlank()) "Ahora suena desde «$title»" else "Ahora suena desde ese vídeo"
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED)
+                done(if (e.error == "bad_link") "Pega el enlace de un vídeo de YouTube." else "No se pudo cambiar (${e.status}).")
             } catch (e: Exception) {
                 done("Sin conexión con el servidor.")
             }

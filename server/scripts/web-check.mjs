@@ -1170,8 +1170,126 @@ try {
         await apiCall('POST', '/logout');
     }
 
+    // 13. Canciones que fallan (mockups/fallos-v1.html): con vídeos inventados, que YouTube no tiene y fallan
+    // siempre («El vídeo ya no está disponible»). Son distintos en cada pasada, así que su «otro enlace» no
+    // estorba a la siguiente.
+    {
+        const P = 'fallos: ';
+        const apiCall = (method, path, body) => js(`fetch(${JSON.stringify(`/api${path}`)}, { method: ${JSON.stringify(method)}, credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-MyMusic': 'web' }, body: ${body ? JSON.stringify(JSON.stringify(body)) : 'undefined'} }).then(r => r.json())`);
+        const fakeId = () => `zz${Math.random().toString(36).slice(2, 11).padEnd(9, 'q')}`;
+        const fake = n => ({ key: `yt:${fakeId()}`, platform: 'youtube', title: `Prueba fallo ${n}`, artist: 'Nadie', durationSec: 200, thumb: null });
+        const rick = { key: 'yt:dQw4w9WgXcQ', platform: 'youtube', title: 'Never Gonna Give You Up', artist: 'Rick Astley', durationSec: 213, thumb: null };
+        const playing = `decodeURIComponent(${A}?.src ?? '')`;
+        const makeList = async (name, tracks) => {
+            const { list } = await apiCall('POST', '/lists', { name });
+            for (const track of tracks) await apiCall('POST', `/lists/${list.id}/tracks`, { track });
+            return list.id;
+        };
+
+        await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+        await send('Page.navigate', { url: `${base}/` });
+        const where = await until(`document.querySelector('.login input[name=username]') ? 'login' : (${text('.main h3')} === 'Inicio' && 'home')`, 15000);
+        if (where === 'login') {
+            await js(typeInto('.login input[name=username]', user));
+            await js(typeInto('.login input[name=password]', password));
+            await js(`document.querySelector('.login form').requestSubmit()`);
+            await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        }
+
+        // Falla la primera: aviso con el motivo y, a los 2 s, la siguiente
+        const first = fake(1);
+        const skipList = await makeList(`zz prueba fallos ${Date.now() % 100000}`, [first, rick]);
+        await js('location.reload()');        // para que la barra lateral tenga la lista nueva
+        await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        await js(clickText('.side .pl', 'zz prueba fallos'));
+        await until(`!!document.querySelector('.listhead')`, 8000);
+        await js(clickText('.listhead .btn', 'Reproducir'));
+        const notice = await until(`(${text('.toast')}).includes('Paso a la siguiente') && ${text('.toast')}`, 60000);
+        check(`${P}al fallar, avisa con el motivo`, Boolean(notice) && notice.includes('«Prueba fallo 1»') && notice.includes('no está disponible'), notice ?? '(sin aviso)');
+        await shot('13a_aviso');
+        const skipped = await until(`${playing}.includes('yt:dQw4w9WgXcQ')`, 15000);
+        check(`${P}y pasa sola a la siguiente`, Boolean(skipped), await js(playing));
+
+        // El apartado, desde Ajustes, con su contador
+        await js(`document.querySelector('.who').click()`);
+        const count = await until(`!document.querySelector('.failline .count').classList.contains('hidden') && document.querySelector('.failline .count').textContent`, 8000);
+        check(`${P}Ajustes tiene la línea con el contador`, Number(count) >= 1, `contador ${count}`);
+        await shot('13b_ajustes');
+        await js(`document.querySelector('.failline .btn').click()`);
+        const row = await until(`[...document.querySelectorAll('.modal .pick.fail')].find(r => r.textContent.includes('Prueba fallo 1'))?.textContent`, 8000);
+        check(`${P}el apartado la enseña con su lista y el motivo`, Boolean(row) && row.includes('El vídeo ya no está disponible') && row.includes('de «zz prueba fallos'), row ?? '(no sale)');
+        await shot('13c_apartado');
+
+        // «Otro enlace…»: pegar uno; sale del apartado y, desde entonces, suena desde ese vídeo
+        await js(`[...document.querySelectorAll('.modal .pick.fail')].find(r => r.textContent.includes('Prueba fallo 1')).querySelector('.btn.sm:nth-of-type(2)').click()`);
+        await until(`[...document.querySelectorAll('.modal h2')].some(e => e.textContent === 'Poner otro enlace')`, 8000);
+        const altModal = `[...document.querySelectorAll('.modal')].find(m => m.querySelector('h2')?.textContent === 'Poner otro enlace')`;
+        const found = await until(`!${altModal}.querySelector('.picks').textContent.includes('Buscando') && ${altModal}.querySelectorAll('.pick').length + 1`, 40000);
+        check(`${P}«Otro enlace…» busca otros vídeos de la canción`, Boolean(found), `${(found || 1) - 1} candidatos`);
+        await shot('13d_otro_enlace');
+        await js(typeInto('.linkrow input', 'https://youtu.be/dQw4w9WgXcQ'));
+        await js(`document.querySelector('.linkrow .btn').click()`);
+        const linked = await until(`(${text('.toast')}).includes('Ahora suena desde') && ${text('.toast')}`, 30000);
+        check(`${P}«Otro enlace…» con un enlace pegado`, Boolean(linked), linked ?? '(sin aviso)');
+        const after = await apiCall('GET', '/failures');
+        check(`${P}y sale del apartado`, !after.failures.some(f => f.key === first.key));
+        await js(`document.querySelectorAll('.modal .acts .btn').forEach(b => b.textContent === 'Cerrar' && b.click())`);
+
+        // Tres seguidas: se para en la tercera y lo dice
+        const [b, c, d] = [fake(2), fake(3), fake(4)];
+        const streakList = await makeList(`zz prueba tres fallos ${Date.now() % 100000}`, [b, c, d, rick]);
+        await js('location.reload()');
+        await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        await js(clickText('.side .pl', 'zz prueba tres fallos'));
+        await until(`!!document.querySelector('.listhead')`, 8000);
+        await js(clickText('.listhead .btn', 'Reproducir'));
+        const stopped = await until(`(${text('.player .now small')}).includes('Han fallado 3 seguidas') && ${playing}`, 120000);
+        check(`${P}con 3 fallos seguidos se para en la tercera`, Boolean(stopped) && stopped.includes(d.key) && !stopped.includes('dQw4w9WgXcQ'), stopped ?? await js(text('.player .now small')));
+        await shot('13e_tres_seguidas');
+
+        // «Descartar» en los tres puntos
+        await js(`document.querySelector('.who').click()`);
+        await until(`!!document.querySelector('.failline .btn')`, 8000);
+        await js(`document.querySelector('.failline .btn').click()`);
+        await until(`[...document.querySelectorAll('.modal .pick.fail')].some(r => r.textContent.includes('Prueba fallo 2'))`, 8000);
+        await js(`[...document.querySelectorAll('.modal .pick.fail')].find(r => r.textContent.includes('Prueba fallo 2')).querySelector('.ib').click()`);
+        await until(`!!document.querySelector('.menu')`, 5000);
+        const menuItems = await js(`[...document.querySelectorAll('.menu button')].map(b => b.textContent).join(' | ')`);
+        check(`${P}los tres puntos: «Quitar de la lista» y «Descartar»`, menuItems.includes('Quitar de «zz prueba tres fallos') && menuItems.includes('Descartar'), menuItems);
+        await js(clickText('.menu button', 'Descartar'));
+        check(`${P}«Descartar» la quita del apartado`, Boolean(await until(`![...document.querySelectorAll('.modal .pick.fail')].some(r => r.textContent.includes('Prueba fallo 2'))`, 8000)));
+
+        // Móvil (pantallas 4 y 5): la fila abre una hoja con las cuatro opciones
+        await js(`document.querySelectorAll('.modal .acts .btn').forEach(b => b.textContent === 'Cerrar' && b.click())`);
+        await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+        await send('Page.navigate', { url: `${base}/` });
+        await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        await tap(q('.main .top .ib'));
+        await until(`!!document.querySelector('.failline .btn')`, 8000);
+        await tap(q('.failline .btn'));
+        await until(`[...document.querySelectorAll('.modal .pick.fail')].some(r => r.textContent.includes('Prueba fallo 3'))`, 8000);
+        await shot('m13a_apartado');
+        await tap(`[...document.querySelectorAll('.modal .pick.fail')].find(r => r.textContent.includes('Prueba fallo 3'))`);
+        const sheet = await until(`[...document.querySelectorAll('.sheet .opt')].map(o => o.textContent).join(' | ')`, 5000);
+        check(`${P}móvil: tocar una abre la hoja con las cuatro opciones`, Boolean(sheet) && ['Probar otra vez', 'Poner otro enlace', 'Quitar de «zz prueba tres fallos', 'Descartar'].every(label => sheet.includes(label)) && await js(fits), sheet ?? '(sin hoja)');
+        await shot('m13b_opciones');
+
+        // Limpieza: las dos listas de prueba a la papelera y lo que quede en el apartado, descartado
+        await js(`${A}?.pause()`);
+        for (const listId of [skipList, streakList]) await apiCall('DELETE', `/lists/${listId}`);
+        for (const item of (await apiCall('GET', '/failures')).failures.filter(f => /^Prueba fallo/.test(f.track.title))) await apiCall('DELETE', `/failures/${encodeURIComponent(item.key)}`);
+        await apiCall('POST', '/logout');
+    }
+
     // Respuestas que la propia prueba provoca y el navegador apunta en la consola: no son fallos
-    const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/, /status of 403 .*\/api\/usage/];
+    const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/, /status of 403 .*\/api\/usage/,
+        // sección 13: los vídeos inventados no se pueden sacar (502), y preguntar por un fallo que no existe da 404
+        /status of 502 .*\/api\/stream\/yt%3Azz/, /status of 404 .*\/api\/failures\//,
+        // alguna miniatura de los resultados de YouTube no existe: el panel pone un degradado en su lugar
+        /status of 404 .*i\.ytimg\.com\//];
     const real = problems.filter(problem => !expected.some(pattern => pattern.test(problem)));
     check('sin errores de JavaScript ni de carga en la consola', real.length === 0, real.slice(0, 5).join(' | '));
 } catch (error) {

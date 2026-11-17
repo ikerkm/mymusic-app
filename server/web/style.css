@@ -392,6 +392,8 @@ div.pick{cursor:default}
 .usetable{table-layout:auto;margin-top:0}
 .usetable td.r,.usetable th.r{width:auto;text-align:right;color:var(--tx)}
 .usetable tr.tot td{font-weight:700;border-top:1px solid var(--line);border-bottom:0}
+.usetable small.fails{display:block;color:var(--sc);font-size:11px;font-weight:400}
+.usewrap{overflow-x:auto;max-width:100%}
 .usage .note.big{color:var(--tx);font-size:14px;font-weight:650}
 .usage .note.warn{color:var(--sc)}
 .usecard .tx small{display:block;color:var(--mut);font-size:12px;white-space:normal}
@@ -552,3 +554,17 @@ table.albumt td.m,table.albumt th.m{width:40px}
 .m .albumhead .acts{grid-row:2}
 .m .row > .ib.like{margin-right:-6px}
 .m .opt small{margin-left:auto;color:var(--mut);font-size:12.5px;max-width:45%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---------- canciones que fallan (§19, mockups/fallos-v1.html) ---------- */
+.count{min-width:20px;height:20px;border-radius:99px;background:var(--sc);color:#2b1300;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;margin:0 10px 0 auto}
+.rowline.failline > div{flex:1;min-width:0}
+.pick.fail{cursor:default}
+.pick.fail .btn.sm{height:30px;padding:0 12px;font-size:12px;flex:none}
+.pick small.why{color:var(--sc);white-space:normal}
+.modal.wide{width:660px}
+.pick.failing{outline:1px solid #ff6b6b66}
+.pill.badfail{flex:none;font-size:10px;font-weight:650;padding:1px 7px;border-radius:99px;background:#ff6b6b22;color:var(--yt)}
+.linkrow{display:flex;gap:8px;align-items:center}
+.linkrow .in{flex:1;min-width:0;margin:0}
+.m .pick.fail{cursor:pointer}
+.m .pick.fail .btn.sm{display:none}

@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyMusic — maqueta de canciones que fallan</title>
+<style>
+:root{
+  --page:#15171c; --bg:#0d0e12; --side:#111318; --sur:#1a1c24; --sur2:#252834; --line:#2f3342;
+  --tx:#eef0f6; --mut:#9aa0b3; --acc:#9d8cff; --acc-d:#1b1640; --ok:#6fdc9a;
+  --yt:#ff6b6b; --sp:#4ad98a; --sc:#ff9a4a; --new:#ffd166;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--tx);font:13px/1.4 "Segoe UI",Roboto,system-ui,sans-serif;padding:30px 24px 70px}
+header.top{max-width:1290px;margin:0 auto 26px}
+header.top h1{font-size:24px;font-weight:650;letter-spacing:-.3px}
+header.top p{color:var(--mut);margin-top:6px;max-width:86ch;font-size:14px}
+header.top ul{color:var(--mut);margin:10px 0 0 18px;max-width:86ch;font-size:13.5px;line-height:1.55}
+header.top li{margin-top:3px}
+header.top b{color:var(--tx)}
+h2.part{max-width:1290px;margin:10px auto 18px;font-size:17px;font-weight:650;border-bottom:1px solid var(--line);padding-bottom:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,300px);gap:40px 30px;justify-content:center;max-width:1290px;margin:0 auto 40px}
+.cell h2{font-size:14px;font-weight:650;margin-bottom:10px}
+.cell h2 span,.shot h2 span{color:var(--acc);margin-right:6px}
+.cell p.cap,.shot p.cap{color:var(--mut);font-size:12.5px;margin-top:10px;line-height:1.45}
+.cell p.cap b,.shot p.cap b{color:var(--tx)}
+.tag{display:inline-block;font-size:10px;font-weight:700;color:#201a00;background:var(--new);border-radius:99px;padding:1px 7px;margin-left:6px;vertical-align:1px;letter-spacing:.3px}
+.ring{outline:2px dashed var(--new);outline-offset:4px;border-radius:8px}
+
+.ph{width:300px;height:640px;background:var(--bg);border:2px solid #343949;border-radius:34px;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.sb{height:28px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;padding:0 22px 3px;font-size:11px;font-weight:600;color:#d5d8e2}
+.scr{flex:1;min-height:0;overflow:hidden;padding:6px 16px 0;display:flex;flex-direction:column}
+.ic{width:20px;height:20px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ic.f{fill:currentColor;stroke:none}
+.ic.s{width:16px;height:16px}
+.mut{color:var(--mut)}
+.bar-top{display:flex;align-items:center;gap:10px;height:44px;flex:none}
+.bar-top h3{font-size:18px;font-weight:650;flex:1}
+.bar-top .mid{flex:1;text-align:center;font-size:11.5px;color:var(--mut);line-height:1.25}
+.bar-top .mid b{display:block;color:var(--tx);font-size:13px}
+.sec{font-size:11px;font-weight:650;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;margin:14px 0 6px;flex:none}
+.cv{flex:none;border-radius:8px;background:linear-gradient(135deg,#7b6cff,#ff7ac3)}
+.c2{background:linear-gradient(135deg,#19c3a6,#2b6cff)}.c3{background:linear-gradient(135deg,#ffb347,#ff5d6c)}
+.c4{background:linear-gradient(135deg,#3a3f5c,#8e9bd6)}.c5{background:linear-gradient(135deg,#d7ff6b,#22b573)}
+.c6{background:linear-gradient(135deg,#ff6bd6,#5b2bff)}.c7{background:linear-gradient(135deg,#5ee0ff,#7b6cff)}
+.row{display:flex;align-items:center;gap:10px;padding:6px 0;flex:none}
+.row .cv{width:40px;height:40px}
+.row .n{width:16px;text-align:right;color:var(--mut);font-size:12px;flex:none}
+.row .t{flex:1;min-width:0}
+.row .t b{display:block;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t small{display:block;color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t small.why{color:var(--sc)}
+.row.on .t b{color:var(--acc)}
+.row.bad .t b{color:var(--mut);text-decoration:line-through;text-decoration-color:#ff6b6b88}
+.row > .ic{color:var(--mut)}
+.bd{font-size:9.5px;font-weight:650;padding:0 5px;border-radius:99px;border:1px solid;margin-left:4px;vertical-align:1px}
+.yt{color:var(--yt)} .sp{color:var(--sp)}
+.mini{flex:none;margin:6px 10px;background:var(--sur2);border-radius:14px;padding:8px 12px 9px 8px;display:flex;align-items:center;gap:10px;position:relative;overflow:hidden}
+.mini .cv{width:36px;height:36px}
+.mini .t{flex:1;min-width:0}
+.mini .t b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini .t small{color:var(--mut);font-size:11px}
+.mini::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:4%;background:var(--acc)}
+.pnav{flex:none;height:56px;display:flex;border-top:1px solid var(--line);background:var(--bg)}
+.pnav div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10.5px;color:var(--mut)}
+.pnav div.on{color:var(--acc)}
+.toast{position:absolute;left:24px;right:24px;bottom:132px;background:var(--sur2);border-radius:12px;padding:10px 14px;font-size:12.5px;box-shadow:0 6px 18px #0009;line-height:1.35}
+.toast b{color:var(--tx)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 14px;border-radius:99px;background:var(--sur2);font-weight:600;font-size:12.5px;white-space:nowrap}
+.btn.pri{background:var(--acc);color:#14102e}
+.dim{position:absolute;inset:0;background:#000b}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--sur);border-radius:22px 22px 0 0;padding:10px 16px 18px}
+.sheet::before{content:"";display:block;width:36px;height:4px;border-radius:9px;background:var(--line);margin:0 auto 12px}
+.sheet h4{font-size:15px;font-weight:650}
+.opt{display:flex;align-items:center;gap:14px;padding:11px 2px;font-size:13.5px}
+.opt .ic{color:var(--mut)}
+.opt small{color:var(--mut);margin-left:auto;font-size:12px}
+.opt.sep{border-top:1px solid var(--line);margin-top:4px;padding-top:14px}
+.in{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:9px 12px;font-size:12.5px;color:var(--mut);flex:1;min-width:0;white-space:nowrap;overflow:hidden}
+.set{background:var(--sur);border-radius:14px;padding:2px 14px;flex:none}
+.set .opt{justify-content:space-between;border-bottom:1px solid var(--line);font-size:13.5px}
+.set .opt:last-child{border-bottom:0}
+.set .opt small{display:block;margin:0;font-size:11.5px}
+.count{min-width:20px;height:20px;border-radius:99px;background:var(--sc);color:#2b1300;font-size:11px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 6px;margin-left:auto}
+.pill{font-size:10px;font-weight:650;padding:1px 7px;border-radius:99px;background:#6fdc9a22;color:var(--ok)}
+.pill.cur{background:#ff6b6b22;color:var(--yt)}
+.prog{height:4px;background:var(--sur2);border-radius:9px;position:relative}
+.times{display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-top:7px}
+.ctl{display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding:0 4px}
+.ctl .ic{width:24px;height:24px}
+.ctl .big{width:62px;height:62px;border-radius:50%;background:var(--acc);color:#14102e;display:flex;align-items:center;justify-content:center}
+.ctl .big .ic{width:28px;height:28px}
+.err{color:var(--yt);font-size:12.5px;margin-top:10px;line-height:1.4}
+.note{color:var(--mut);font-size:11.5px;line-height:1.4}
+
+/* panel web (escritorio) */
+.shot{max-width:1120px;margin:0 auto 46px}
+.shot h2{font-size:15px;font-weight:650;margin-bottom:10px}
+.desk{border:1px solid #343949;border-radius:12px;overflow:hidden;background:var(--bg);position:relative;height:560px}
+.desk .bg{position:absolute;inset:0;display:grid;grid-template-columns:230px 1fr;opacity:.35}
+.desk .bg .side{background:var(--side);border-right:1px solid var(--line)}
+.desk .shade{position:absolute;inset:0;background:#000a;display:flex;align-items:center;justify-content:center}
+.modal{width:560px;background:var(--sur);border-radius:16px;padding:20px 22px;box-shadow:0 20px 50px #000c}
+.modal h2{font-size:18px;font-weight:650;margin-bottom:4px}
+.rowline{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.rowline > div{flex:1;min-width:0}
+.rowline small{display:block;color:var(--mut);font-size:12px}
+.pick{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.pick .cv{width:38px;height:38px}
+.pick .tx{flex:1;min-width:0}
+.pick .tx b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pick .tx small{display:block;color:var(--mut);font-size:12px}
+.pick .tx small.why{color:var(--sc)}
+.acts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.btn.sm{height:30px;padding:0 12px;font-size:12px}
+.wtoast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:var(--sur2);border-radius:10px;padding:9px 14px;font-size:12.5px;box-shadow:0 6px 18px #0009}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4.5" height="16" rx="1"/><rect x="13.5" y="4" width="4.5" height="16" rx="1"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 4l10 8-10 8z"/><rect x="17" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 4L9 12l10 8z"/><rect x="4.4" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 7h4l10 10h4M3 17h4l3-3M14 10l3-3h4M18 4l3 3-3 3M18 14l3 3-3 3"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12V9a3 3 0 0 1 3-3h11M20 12v3a3 3 0 0 1-3 3H6M15 3l3 3-3 3M9 15l-3 3 3 3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></symbol>
+  <symbol id="i-fwd" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M4 8h14l-3-3M20 16H6l3 3"/></symbol>
+  <symbol id="i-bin" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-retry" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></symbol>
+</svg>
+
+<header class="top">
+  <h1>MyMusic — maqueta de canciones que fallan</h1>
+  <p>2026-11-17 · Borrador para aprobar. Es un <b>añadido</b> a las maquetas v1 de la app y del panel web: solo salen las pantallas que cambian o que son nuevas. Lo nuevo va marcado en amarillo. Canciones, motivos y cifras son de ejemplo.</p>
+  <ul>
+    <li><b>Qué pasa cuando una canción falla:</b> el servidor ya la reintenta una vez (así se salvaron 8 de los 9 errores 403 del Flip). Si falla también, la app o el panel avisa y <b>a los 2 segundos pasa sola a la siguiente</b> (pantalla 1). Con la pantalla bloqueada pasa igual: el aviso se verá al volver a la app.</li>
+    <li><b>Los dos frenos</b> (tu «1-si»): si el fallo es de <b>conexión con el servidor</b>, no salta, porque fallarían todas, y se queda parada como ahora. Con <b>3 fallos seguidos</b> se para y lo dice (pantalla 2).</li>
+    <li><b>Qué se apunta:</b> cada usuario ve sus fallos: la canción, el motivo en claro, cuántas veces y cuándo, y de qué lista sonaba. <b>Sale sola del apartado cuando vuelve a sonar bien.</b></li>
+    <li><b>Dónde:</b> en Ajustes, con un contador (tu «3-ok en ajustes»; pantalla 3). Abre el apartado (pantalla 4); cada canción tiene sus opciones (pantalla 5).</li>
+    <li><b>Otro enlace</b> (pantalla 6): eliges otro vídeo de YouTube de la misma canción o pegas un enlace. La canción sigue en sus listas, en el mismo sitio y con su nombre, pero <b>suena desde el otro vídeo, para todos los usuarios</b> (tu «2-si»). En una canción de Spotify es lo mismo que «Cambiar coincidencia». Al poner otro enlace sale del apartado; si vuelve a fallar, vuelve.</li>
+    <li><b>Motivos en claro:</b> «Tiene restricción de edad», «YouTube rechazó la descarga», «El vídeo ya no está disponible», «YouTube pide confirmar que no eres un bot» y, si no es ninguno, la última línea del error.</li>
+    <li><b>Panel web:</b> en el móvil, las pantallas 1-6, igual que en la app. En el PC, el aviso sale abajo, la línea nueva está en la ventana de Ajustes y el apartado es una ventana como la de la Papelera (pantallas 7 y 8).</li>
+  </ul>
+</header>
+
+<h2 class="part">App Android (y panel web en el móvil)</h2>
+<div class="grid">
+
+<!-- 1 AVISO Y SALTA -->
+<section class="cell">
+  <h2><span>1</span>Falla y pasa a la siguiente <i class="tag">NUEVO</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><span style="flex:1"></span><svg class="ic"><use href="#i-more"/></svg></div>
+      <div style="font-size:21px;font-weight:700;letter-spacing:-.3px">breakcore</div>
+      <div class="mut" style="font-size:12px;margin-bottom:8px">212 canciones · 11 h 40 min</div>
+      <div class="row"><span class="n">12</span><div class="t"><b>Static Lullaby</b><small>Nine Volt Choir · 2:58</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row bad"><span class="n">13</span><div class="t"><b>Glass Engine</b><small>Halcyon Drift · 4:05</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row on"><span class="n">14</span><div class="t"><b>Amen, Sister (2 a.m. edit)</b><small>Kettle Drift · 3:27</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="n">15</span><div class="t"><b>Soft Reset</b><small>Mira Vantablack · 6:40</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="n">16</span><div class="t"><b>Pixel Rain</b><small>Sora Kite · 3:15</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+    </div>
+    <div class="toast ring"><b>No se pudo reproducir «Glass Engine»</b> (tiene restricción de edad). Paso a la siguiente.</div>
+    <div class="mini"><div class="cv c6"></div><div class="t"><b>Amen, Sister (2 a.m. edit)</b><small>Kettle Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div class="on"><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Cuando una canción no se puede reproducir (ya reintentada por el servidor), sale un <b>aviso con el motivo</b> y a los 2 s <b>suena la siguiente</b>. La que falló queda apuntada en «Canciones que fallaron». En la lista no cambia nada (aquí está tachada solo para que se vea cuál falló). Si era la última y no hay radio, se para como ahora.</p>
+</section>
+
+<!-- 2 TRES SEGUIDAS -->
+<section class="cell">
+  <h2><span>2</span>Tres fallos seguidos <i class="tag">NUEVO</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr" style="padding:6px 22px 0">
+      <div class="bar-top"><svg class="ic"><use href="#i-down"/></svg><div class="mid">Sonando de<b>breakcore</b></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="cv c4" style="width:220px;height:220px;border-radius:20px;margin:10px auto 0;opacity:.45"></div>
+      <div style="margin-top:18px"><div style="font-size:19px;font-weight:700">Soft Reset</div><div class="mut">Mira Vantablack <span class="bd yt">YouTube</span></div></div>
+      <div class="err ring" style="padding:8px 10px;border-radius:10px;background:#ff6b6b14;margin-top:12px"><b>Han fallado 3 seguidas.</b> Parece un problema de YouTube o del servidor, así que me paro aquí. Prueba más tarde, o «Probar extracción» en Ajustes.</div>
+      <div class="prog" style="margin-top:16px"></div>
+      <div class="times"><span>0:00</span><span>6:40</span></div>
+      <div class="ctl">
+        <svg class="ic"><use href="#i-shuffle"/></svg>
+        <svg class="ic f"><use href="#i-prev"/></svg>
+        <div class="big"><svg class="ic f"><use href="#i-play"/></svg></div>
+        <svg class="ic f"><use href="#i-next"/></svg>
+        <svg class="ic"><use href="#i-repeat"/></svg>
+      </div>
+    </div>
+  </div>
+  <p class="cap">Si fallan <b>tres seguidas</b> no sigue saltando: se queda parada en la tercera y lo explica. Las tres quedan apuntadas. Con <b>«Siguiente»</b> o tocando otra canción se sigue como siempre, y el contador vuelve a cero. <b>Sin conexión con el servidor</b> no salta nunca: sale «Sin conexión con el servidor», como ahora.</p>
+</section>
+
+<!-- 3 AJUSTES -->
+<section class="cell">
+  <h2><span>3</span>Ajustes <i class="tag">CAMBIA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><h3>Ajustes</h3></div>
+      <div class="sec" style="margin-top:4px">Servidor</div>
+      <div class="set">
+        <div class="opt"><div>mymusic.example.com<small>Conectado</small></div></div>
+        <div class="opt"><div>Probar extracción<small>Comprueba que YouTube responde</small></div><svg class="ic s"><use href="#i-fwd"/></svg></div>
+      </div>
+      <div class="sec">Tus datos</div>
+      <div class="set">
+        <div class="opt"><div>Historial</div><svg class="ic s"><use href="#i-fwd"/></svg></div>
+        <div class="opt"><div>Papelera<small>3 elementos recuperables</small></div><svg class="ic s"><use href="#i-fwd"/></svg></div>
+        <div class="opt ring" style="margin:0 -6px;padding-left:6px;padding-right:6px"><div>Canciones que fallaron<small>3 por revisar</small></div><span class="count">3</span><svg class="ic s" style="margin-left:8px"><use href="#i-fwd"/></svg></div>
+      </div>
+      <div class="sec">Cuenta</div>
+      <div class="set">
+        <div class="opt"><div>pareja<small>Sesión iniciada en este dispositivo</small></div></div>
+        <div class="opt" style="color:var(--yt)">Cerrar sesión</div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">Una línea nueva en <b>«Tus datos»</b>, debajo de la Papelera, con el <b>contador</b> de las que hay por revisar. Sin ninguna dice «Ninguna» y no lleva contador.</p>
+</section>
+
+<!-- 4 EL APARTADO -->
+<section class="cell">
+  <h2><span>4</span>«Canciones que fallaron» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><h3>Canciones que fallaron</h3></div>
+      <p class="note" style="margin-bottom:8px">Las que no se pudieron reproducir. Salen solas de aquí cuando vuelven a sonar bien.</p>
+      <div class="row"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift · de «breakcore»</small><small class="why">Tiene restricción de edad · 2 veces · hoy</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c3"></div><div class="t"><b>Tunnel Vision 174</b><small>DJ Okapi · de «coche»</small><small class="why">YouTube rechazó la descarga · ayer</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c7"></div><div class="t"><b>Night Bus to Ceres</b><small>Halcyon Drift · <span class="sp">Spotify</span> · de «likes»</small><small class="why">El vídeo ya no está disponible · 15 nov</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+    </div>
+    <div class="pnav"><div><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">La más reciente arriba. Cada canción dice <b>de qué lista</b> sonaba y, en naranja, <b>el motivo, cuántas veces y cuándo</b> falló la última vez. Tocarla o sus tres puntos abren sus opciones (pantalla 5).</p>
+</section>
+
+<!-- 5 OPCIONES -->
+<section class="cell">
+  <h2><span>5</span>Opciones de una que falló <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><h3>Canciones que fallaron</h3></div>
+      <div class="row"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift · de «breakcore»</small></div></div>
+    </div>
+    <div class="dim"></div>
+    <div class="sheet">
+      <div class="row" style="padding-bottom:4px"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift · 4:05 <span class="bd yt">YouTube</span></small></div></div>
+      <p class="note" style="color:var(--sc);margin-bottom:6px">Tiene restricción de edad · 2 veces · hoy a las 14:32</p>
+      <div class="opt"><svg class="ic"><use href="#i-retry"/></svg>Probar otra vez</div>
+      <div class="opt"><svg class="ic"><use href="#i-link"/></svg>Poner otro enlace…</div>
+      <div class="opt sep"><svg class="ic"><use href="#i-bin"/></svg>Quitar de la lista<small>breakcore</small></div>
+      <div class="opt"><svg class="ic"><use href="#i-x"/></svg>Descartar<small>deja de salir aquí</small></div>
+    </div>
+  </div>
+  <p class="cap"><b>Probar otra vez</b> la pone a sonar (si suena, sale del apartado). <b>Poner otro enlace…</b> abre la pantalla 6. <b>Quitar de la lista</b> la manda a la papelera, como siempre. <b>Descartar</b> la quita de aquí sin tocar nada más.</p>
+</section>
+
+<!-- 6 OTRO ENLACE -->
+<section class="cell">
+  <h2><span>6</span>«Poner otro enlace» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr"></div>
+    <div class="dim"></div>
+    <div class="sheet" style="top:70px;border-radius:22px 22px 0 0">
+      <h4>Poner otro enlace</h4>
+      <p class="note">Glass Engine — Halcyon Drift</p>
+      <p class="note" style="margin:6px 0 4px">Suena desde el vídeo que elijas, en todas sus listas y para todos.</p>
+      <div class="row" style="padding:7px 0;border-bottom:1px solid var(--line)"><div class="cv c4"></div><div class="t"><b>Halcyon Drift - Glass Engine (Official Video)</b><small>Halcyon Drift · 4:12 · +7 s</small></div><span class="pill cur">falla</span></div>
+      <div class="row ring" style="padding:7px 0;border-bottom:1px solid var(--line)"><div class="cv c2"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift - Topic · 4:05</small></div></div>
+      <div class="row" style="padding:7px 0;border-bottom:1px solid var(--line)"><div class="cv c5"></div><div class="t"><b>Halcyon Drift — Glass Engine (audio)</b><small>Neon Archive · 4:06 · +1 s</small></div></div>
+      <div class="row" style="padding:7px 0;border-bottom:1px solid var(--line)"><div class="cv c6"></div><div class="t"><b>Glass Engine (live at Ceres)</b><small>Halcyon Drift · 5:31 · +86 s</small></div></div>
+      <div class="sec" style="margin-top:12px">O pega un enlace de YouTube</div>
+      <div style="display:flex;gap:8px;align-items:center"><div class="in">https://youtu.be/…</div><span class="btn pri">Usar</span></div>
+    </div>
+  </div>
+  <p class="cap">Como «Cambiar coincidencia»: <b>otros vídeos de la misma canción</b> en YouTube, con lo que se alejan de su duración. El que falla va marcado. También se puede <b>pegar un enlace</b>. Al elegir, dice «Ahora suena desde ese vídeo» y la canción sale del apartado. En una canción de Spotify, esto cambia su coincidencia.</p>
+</section>
+
+</div>
+
+<h2 class="part">Panel web en el PC</h2>
+
+<!-- 7 AJUSTES WEB -->
+<section class="shot">
+  <h2><span>7</span>Aviso y Ajustes <i class="tag">CAMBIA</i></h2>
+  <div class="desk">
+    <div class="bg"><div class="side"></div><div></div></div>
+    <div class="shade">
+      <div class="modal">
+        <h2>Ajustes</h2>
+        <div class="rowline"><span class="mut" style="width:90px">Usuario</span><b>pareja</b></div>
+        <div class="rowline"><span class="mut" style="width:90px">Servidor</span><span>mymusic.example.com · 0.13.0</span></div>
+        <div class="rowline"><div><b>Probar extracción</b><small>Comprueba que YouTube responde</small></div><span class="btn sm">Probar</span></div>
+        <div class="rowline"><div><b>Papelera</b><small>3 elementos recuperables</small></div><span class="btn sm">Abrir</span></div>
+        <div class="rowline ring" style="margin:0 -6px;padding-left:6px;padding-right:6px"><div><b>Canciones que fallaron</b><small>3 por revisar</small></div><span class="count">3</span><span class="btn sm">Abrir</span></div>
+        <div class="acts"><span class="btn sm" style="color:var(--yt)">Cerrar sesión</span><span class="btn sm">Cerrar</span></div>
+      </div>
+    </div>
+    <div class="wtoast ring"><b>No se pudo reproducir «Glass Engine»</b> (tiene restricción de edad). Paso a la siguiente.</div>
+  </div>
+  <p class="cap">En el PC el aviso sale abajo, encima de la barra del reproductor, y a los 2 s suena la siguiente. Los mismos dos frenos que en el móvil. En la ventana de Ajustes, debajo de la Papelera, la línea nueva con su contador y «Abrir».</p>
+</section>
+
+<!-- 8 APARTADO WEB -->
+<section class="shot">
+  <h2><span>8</span>«Canciones que fallaron» <i class="tag">NUEVA</i></h2>
+  <div class="desk">
+    <div class="bg"><div class="side"></div><div></div></div>
+    <div class="shade">
+      <div class="modal" style="width:640px">
+        <h2>Canciones que fallaron</h2>
+        <p class="note" style="margin-bottom:6px">Las que no se pudieron reproducir. Salen solas de aquí cuando vuelven a sonar bien.</p>
+        <div class="pick"><div class="cv c4"></div><div class="tx"><b>Glass Engine</b><small>Halcyon Drift · de «breakcore»</small><small class="why">Tiene restricción de edad · 2 veces · hoy</small></div><span class="btn sm">Probar</span><span class="btn sm ring">Otro enlace…</span><svg class="ic" style="color:var(--mut)"><use href="#i-more"/></svg></div>
+        <div class="pick"><div class="cv c3"></div><div class="tx"><b>Tunnel Vision 174</b><small>DJ Okapi · de «coche»</small><small class="why">YouTube rechazó la descarga · ayer</small></div><span class="btn sm">Probar</span><span class="btn sm">Otro enlace…</span><svg class="ic" style="color:var(--mut)"><use href="#i-more"/></svg></div>
+        <div class="pick"><div class="cv c7"></div><div class="tx"><b>Night Bus to Ceres</b><small>Halcyon Drift · <span class="sp">Spotify</span> · de «likes»</small><small class="why">El vídeo ya no está disponible · 15 nov</small></div><span class="btn sm">Probar</span><span class="btn sm">Otro enlace…</span><svg class="ic" style="color:var(--mut)"><use href="#i-more"/></svg></div>
+        <div class="acts"><span class="btn sm">Cerrar</span></div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">Una ventana como la de la Papelera. En cada canción, <b>«Probar»</b> y <b>«Otro enlace…»</b> a la vista. En los tres puntos, <b>«Quitar de la lista»</b> y <b>«Descartar»</b>. «Otro enlace…» abre una ventana con lo mismo que la pantalla 6.</p>
+</section>
+
+</body>
+</html>

@@ -10,6 +10,8 @@ import { Listening, artistOf, isAutoKind, isPeriod } from './stats.js';
 import { note, who } from './usage.js';
 import { explain } from './ytdlp.js';
 import { ALBUM_ID, ARTIST_ID } from './ytmusic.js';
+import { NO_MATCH, reasonOf } from './failures.js';
+import { cleanTitle } from './matches.js';
 
 // Tramo pedido por el cliente. null = sin cabecera Range; 'invalid' = no se puede servir.
 export function parseRange(header, total) {
@@ -50,7 +52,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, ytmusic = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, artistsWaitMs = 4000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, ytmusic = null, alternates = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, artistsWaitMs = 4000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -64,7 +66,10 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
 
     // De dónde sale el audio de una clave. Para una canción de Spotify es su coincidencia en YouTube,
     // que se busca aquí si aún no la tiene (por eso puede tardar unos segundos la primera vez).
+    // Con «otro enlace» (§19), una canción de YouTube o SoundCloud suena desde el vídeo elegido.
     async function resolveAudio(key) {
+        const alternate = alternates?.get(key);
+        if (alternate) return parseKey(alternate.key);
         const source = parseKey(key);
         if (!source || source.platform !== 'spotify') return source;
         const entry = await matches?.resolve(source.key);
@@ -75,6 +80,8 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
 
     // Lo mismo, pero sin buscar: solo si ya se conoce
     const audioKeyOf = key => {
+        const alternate = alternates?.get(key);
+        if (alternate) return alternate.key;
         const source = parseKey(key);
         if (!source) return null;
         return source.platform === 'spotify' ? matches?.get(source.key)?.yt?.key ?? null : source.key;
@@ -219,6 +226,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             bytes += chunk.length;
             if (!started) {
                 started = true;
+                clearFailure(req, req.params.key);
                 res.status(200).set({ 'Content-Type': sniffMime(chunk), 'Accept-Ranges': 'none', 'Cache-Control': 'private, no-store' });
             }
             if (!res.write(chunk)) {
@@ -228,8 +236,33 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         });
         stream.done.then(({ stderr }) => {
             if (started) return res.end();
-            res.status(502).json({ error: 'extract_failed', message: explain(stderr) });
+            const reason = reasonOf(stderr);
+            noteFailure(req, req.params.key, reason);
+            res.status(502).json({ error: 'extract_failed', message: reason.text, reason: reason.text, code: reason.code });
         });
+    }
+
+    // --- Canciones que fallaron (§19) ---
+    // Lo que el reproductor de un usuario pidió y no se pudo sacar queda apuntado para él, con la
+    // canción tal como estaba en su sesión y la lista de la que sonaba.
+    function noteFailure(req, key, reason) {
+        try {
+            const ctx = stores.for(req.user.id);
+            const session = ctx.sessions.session;
+            const fromSession = session?.tracks?.[key] ?? null;
+            const spotify = key.startsWith('sp:') ? matches?.get(key) : null;
+            const track = fromSession ?? (spotify ? { key, platform: 'spotify', title: spotify.title, artist: spotify.artist, durationSec: spotify.durationSec } : { key, platform: parseKey(key)?.platform });
+            const list = session?.source?.type === 'list' && fromSession ? { id: session.source.id, name: session.source.name } : null;
+            const item = ctx.failures.note(track, reason, { list });
+            log(`[fallos] ${req.user.name}: «${item.track.title}» no se pudo reproducir (${reason.text}; ${item.count} ${item.count === 1 ? 'vez' : 'veces'})`);
+        } catch (error) {
+            log(`[fallos] no se pudo apuntar ${key}: ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+    }
+    // Ha vuelto a sonar bien: sale del apartado
+    function clearFailure(req, key) {
+        const { failures } = stores.for(req.user.id);
+        if (failures.get(key) && failures.remove(key)) log(`[fallos] ${req.user.name}: ${key} ya suena bien`);
     }
 
     app.get('/api/stream/:key', requireAuth, asUser, async (req, res) => {
@@ -240,7 +273,10 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         } catch (error) {
             log(`[stream] ${req.params.key}: no se pudo buscar su coincidencia: ${error.message.slice(0, 200)}`);
         }
-        if (!source) return res.status(502).json({ error: 'no_match', message: 'No se ha encontrado esta canción en YouTube' });
+        if (!source) {
+            noteFailure(req, req.params.key, NO_MATCH);
+            return res.status(502).json({ error: 'no_match', message: 'No se ha encontrado esta canción en YouTube', reason: NO_MATCH.text, code: NO_MATCH.code });
+        }
         syncPins();      // si acaba de conocerse la coincidencia de la canción que suena, queda fijada
 
         const abort = new AbortController();
@@ -254,10 +290,14 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             if (abort.signal.aborted) return;
             if (error.code === 'too_big') return pipeDirect(req, res, source);
             log(`[stream] ${source.key}: ${error.message.slice(0, 300)}`);
-            return res.status(502).json({ error: 'extract_failed', message: explain(error.message) });
+            // El motivo en claro viaja en la respuesta: la app y el panel lo enseñan al pasar a la siguiente
+            const reason = reasonOf(error.message);
+            noteFailure(req, req.params.key, reason);
+            return res.status(502).json({ error: 'extract_failed', message: reason.text, reason: reason.text, code: reason.code });
         }
         // Empieza a sonar: la radio lo necesita para saber cuánto se oyó una canción al saltarla
         stores.for(req.user.id).sessions.served(req.params.key);
+        clearFailure(req, req.params.key);
 
         const total = buffer.total;
         const range = parseRange(req.headers.range, total);
@@ -1058,6 +1098,92 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         log(`[coincidencia] ${req.params.key} → ${chosen.key}, elegida a mano`);
         syncPins();
         res.json({ current: entry.yt, auto: false });
+    });
+
+    // --- Canciones que fallaron (§19, mockups/fallos-v1.html) ---
+    // Las de cada usuario, la más reciente primero. Salen solas al volver a sonar bien (clearFailure),
+    // al ponerles otro enlace o al descartarlas.
+    const failureShown = req => {
+        const shown = showFor(req.ctx);
+        return item => ({ ...item, track: shown(item.track) });
+    };
+    const failureOr404 = (req, res) => {
+        const failure = req.ctx.failures.get(req.params.key);
+        if (!failure) res.status(404).json({ error: 'failure_not_found' });
+        return failure;
+    };
+
+    priv.get('/failures', (req, res) => {
+        const items = req.ctx.failures.all();
+        res.json({ count: items.length, failures: items.map(failureShown(req)) });
+    });
+
+    priv.get('/failures/:key', (req, res) => {
+        const failure = failureOr404(req, res);
+        if (failure) res.json({ failure: failureShown(req)(failure) });
+    });
+
+    // «Descartar»: deja de salir aquí, sin tocar nada más
+    priv.delete('/failures/:key', (req, res) => {
+        if (!failureOr404(req, res)) return;
+        req.ctx.failures.remove(req.params.key);
+        res.json({ ok: true, count: req.ctx.failures.count });
+    });
+
+    // «Poner otro enlace»: otros vídeos de YouTube de la misma canción, con lo que se alejan de su duración.
+    // En una de Spotify son los candidatos de su coincidencia.
+    priv.get('/failures/:key/candidates', async (req, res) => {
+        const failure = failureOr404(req, res);
+        if (!failure) return;
+        const { track } = failure;
+        try {
+            if (track.key.startsWith('sp:')) {
+                matches?.remember([track]);
+                const candidates = await matches.candidates(track.key, 8);
+                return res.json({ current: matches.get(track.key)?.yt?.key ?? null, candidates: candidates ?? [] });
+            }
+            const query = [artistOf(track), cleanTitle(track.title)].filter(Boolean).join(' ');
+            const results = await search(query);
+            const diff = result => (Number.isFinite(result.durationSec) && Number.isFinite(track.durationSec) ? result.durationSec - track.durationSec : null);
+            res.json({ current: audioKeyOf(track.key), candidates: results.slice(0, 8).map(result => ({ ...result, durationDiff: diff(result) })) });
+        } catch (error) {
+            log(`[fallos] candidatos de ${track.key}: ${String(error?.message ?? error).slice(0, 200)}`);
+            res.status(502).json({ error: 'search_failed' });
+        }
+    });
+
+    // Elegir el vídeo (`track`) o pegar un enlace (`url`). Vale para todos los usuarios: en una canción de
+    // YouTube o SoundCloud queda como su otro enlace; en una de Spotify, como su coincidencia.
+    priv.put('/failures/:key/link', async (req, res) => {
+        const failure = failureOr404(req, res);
+        if (!failure) return;
+        const { key } = failure;
+        if (!key.startsWith('sp:') && !alternates) return res.status(404).json({ error: 'not_found' });
+        let chosen = null;
+        if (typeof req.body?.url === 'string') {
+            const link = parseLink(req.body.url.trim());
+            if (link?.kind !== 'yt-video') return res.status(400).json({ error: 'bad_link' });
+            try {
+                chosen = cleanTrack(await importers.youtubeVideo(link.id));
+            } catch (error) {
+                log(`[fallos] enlace ${link.id}: ${String(error?.message ?? error).slice(0, 200)}`);
+                return res.status(502).json({ error: 'link_failed' });
+            }
+            if (!chosen) return res.status(400).json({ error: 'bad_link' });
+        } else {
+            chosen = cleanTrack(req.body?.track);
+        }
+        if (!chosen || chosen.platform !== 'youtube') return res.status(400).json({ error: 'bad_track' });
+        if (key.startsWith('sp:')) {
+            matches.remember([failure.track]);
+            matches.choose(key, chosen);
+        } else {
+            alternates.set(key, chosen, req.user.name);
+        }
+        req.ctx.failures.remove(key);
+        syncPins();
+        log(`[fallos] ${req.user.name}: «${failure.track.title}» suena ahora desde ${chosen.key}`);
+        res.json({ ok: true, current: chosen, count: req.ctx.failures.count });
     });
 
     // --- Fase 4: papelera ---

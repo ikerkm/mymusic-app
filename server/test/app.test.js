@@ -155,7 +155,8 @@ test('si la extracción falla: 502 con mensaje llano', async () => {
     try {
         const res = await s.api(`/api/stream/${KEY}`, { token: s.token });
         assert.equal(res.status, 502);
-        assert.deepEqual(await res.json(), { error: 'extract_failed', message: 'El vídeo no está disponible' });
+        // El motivo en claro va también en `reason` y su tipo en `code` (canciones que fallan, §19, test/fallos.test.js)
+        assert.deepEqual(await res.json(), { error: 'extract_failed', message: 'El vídeo ya no está disponible', reason: 'El vídeo ya no está disponible', code: 'unavailable' });
     } finally { await s.close(); }
 });
 

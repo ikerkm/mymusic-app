@@ -13,6 +13,7 @@ import { UserStores } from './stores.js';
 import { Usage } from './usage.js';
 import { fetchPlaylist, openAudio } from './ytdlp.js';
 import { YtMusic, createYtMusicClient } from './ytmusic.js';
+import { AlternateStore } from './failures.js';
 
 dotenv.config({ path: join(config.root, '.env') });
 
@@ -51,6 +52,8 @@ const app = createApp({
     radio: new Radio({ fetchMix: async (id, limit) => (await fetchPlaylist(mixUrl(id), { limit })).entries, log }),
     // Página de artista y de disco (§18): datos de YouTube Music
     ytmusic: new YtMusic({ client: createYtMusicClient({ log }), log }),
+    // «Otro enlace» de las canciones que fallan (§19): común a todos los usuarios
+    alternates: new AlternateStore(config.dataDir),
     webDir: config.webDir,
     prefetchDelayMs: config.prefetchDelayMs,
     version: config.version,

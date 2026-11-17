@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -48,7 +49,7 @@ private fun Group(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Line(title: String, detail: String? = null, tag: String = "", danger: Boolean = false, arrow: Boolean = false, onClick: (() -> Unit)? = null) {
+private fun Line(title: String, detail: String? = null, tag: String = "", danger: Boolean = false, arrow: Boolean = false, badge: Int? = null, onClick: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(vertical = 12.dp).testTag(tag),
         verticalAlignment = Alignment.CenterVertically,
@@ -56,6 +57,13 @@ private fun Line(title: String, detail: String? = null, tag: String = "", danger
         Column(Modifier.weight(1f)) {
             Text(title, color = if (danger) Mm.Yt else Mm.Tx, fontSize = 14.sp)
             if (detail != null) Text(detail, color = Mm.Mut, fontSize = 12.sp)
+        }
+        // Contador («Canciones que fallaron», §19)
+        if (badge != null && badge > 0) {
+            Text(
+                "$badge", color = Color(0xFF2B1300), fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(end = 8.dp).clip(RoundedCornerShape(50)).background(Mm.Sc).padding(horizontal = 7.dp, vertical = 1.dp),
+            )
         }
         if (arrow) Icon(MmIcons.Forward, contentDescription = null, tint = Mm.Mut, modifier = Modifier.size(16.dp))
     }
@@ -112,6 +120,16 @@ fun SettingsScreen(vm: AppViewModel) {
                 else -> "$inTrash elementos recuperables"
             }
             Line("Papelera", detail, tag = "settingsTrash", arrow = true) { vm.open(Overlay.Trash) }
+            HorizontalDivider(color = Mm.Line)
+            // Canciones que fallaron (§19, mockups/fallos-v1.html), con su contador
+            val failed = vm.failures?.size
+            val failedDetail = when (failed) {
+                null -> "Las que no se pudieron reproducir"
+                0 -> "Ninguna"
+                1 -> "1 por revisar"
+                else -> "$failed por revisar"
+            }
+            Line("Canciones que fallaron", failedDetail, tag = "settingsFailures", arrow = true, badge = failed) { vm.open(Overlay.Failures) }
         }
 
         SectionLabel("Cuenta")

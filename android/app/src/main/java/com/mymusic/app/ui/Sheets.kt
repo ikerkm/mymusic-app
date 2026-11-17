@@ -70,7 +70,7 @@ internal fun SheetWindowFix() {
 }
 
 @Composable
-private fun Option(icon: ImageVector, label: String, tag: String = "", tint: Color = Mm.Mut, note: String? = null, onClick: () -> Unit) {
+internal fun Option(icon: ImageVector, label: String, tag: String = "", tint: Color = Mm.Mut, note: String? = null, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 13.dp, horizontal = 2.dp).testTag(tag),
         verticalAlignment = Alignment.CenterVertically,

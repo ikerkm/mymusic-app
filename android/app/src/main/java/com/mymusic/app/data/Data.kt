@@ -43,6 +43,15 @@ data class ImportPreview(
     val truncated: Boolean,     // Spotify solo deja leer las 100 primeras
 )
 
+/**
+ * Una canción que no se pudo reproducir (§19, «Canciones que fallaron»): el motivo en claro, cuántas
+ * veces, la última vez y la lista de la que sonaba.
+ */
+data class FailureItem(val key: String, val track: Track, val reason: String, val code: String, val count: Int, val lastAt: String?, val list: ListRef?)
+
+/** «Poner otro enlace»: otros vídeos de la misma canción, y el vídeo desde el que suena ahora (el que falla). */
+data class AlternateOptions(val current: String?, val candidates: List<MatchCandidate>)
+
 /** Un vídeo de YouTube candidato a ser la coincidencia de una canción de Spotify. */
 data class MatchCandidate(val track: Track, val durationDiff: Int?)
 
@@ -636,6 +645,37 @@ class Api(private val prefs: Prefs) {
     suspend fun startArtist(id: String, startKey: String?, shuffle: Boolean): SessionView =
         call("POST", "/api/session", JSONObject().put("artist", id).put("startKey", startKey ?: JSONObject.NULL).put("shuffle", shuffle), readTimeoutMs = 60_000)
             .getJSONObject("session").toSession()
+
+    // --- Canciones que fallaron (§19) ---
+
+    suspend fun failures(): List<FailureItem> = call("GET", "/api/failures").getJSONArray("failures").let { a ->
+        List(a.length()) { i ->
+            a.getJSONObject(i).let {
+                FailureItem(
+                    key = it.getString("key"), track = it.getJSONObject("track").toTrack(), reason = it.optString("reason"), code = it.optString("code"),
+                    count = it.optInt("count", 1), lastAt = it.str("lastAt"), list = it.ref("list"),
+                )
+            }
+        }
+    }
+
+    /** «Descartar»: deja de salir en el apartado, sin tocar nada más. */
+    suspend fun dismissFailure(key: String) { call("DELETE", "/api/failures/${enc(key)}") }
+
+    suspend fun failureCandidates(key: String): AlternateOptions = call("GET", "/api/failures/${enc(key)}/candidates", readTimeoutMs = 60_000).let { o ->
+        val list = o.getJSONArray("candidates")
+        AlternateOptions(
+            current = o.str("current"),
+            candidates = List(list.length()) { i -> list.getJSONObject(i).let { MatchCandidate(it.toTrack(), if (it.isNull("durationDiff")) null else it.optInt("durationDiff")) } },
+        )
+    }
+
+    /** «Poner otro enlace»: el vídeo elegido (`track`) o un enlace pegado (`url`). Vale para todos los usuarios. Devuelve el título del vídeo. */
+    suspend fun setFailureLink(key: String, track: Track? = null, url: String? = null): String {
+        val body = JSONObject()
+        if (track != null) body.put("track", track.toJson()) else body.put("url", url)
+        return call("PUT", "/api/failures/${enc(key)}/link", body, readTimeoutMs = 60_000).optJSONObject("current")?.optString("title").orEmpty()
+    }
 
     /** La radio de un artista: una de sus más escuchadas y, detrás, parecidas. Tarda lo que tarde YouTube en dar las mezclas. */
     suspend fun startArtistRadio(id: String): SessionView =

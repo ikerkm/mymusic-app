@@ -86,6 +86,7 @@ fun MainScreen(vm: AppViewModel) {
                         is Overlay.ArtistSongs -> ArtistSongsScreen(vm, top.id, state)
                         is Overlay.Discography -> DiscographyScreen(vm, top.id, top.tab)
                         is Overlay.Album -> AlbumScreen(vm, top.id, state)
+                        Overlay.Failures -> FailuresScreen(vm)
                         else -> when (tab) {
                             Tab.Home -> HomeScreen(vm, state)
                             Tab.Search -> SearchScreen(vm, playingKey = state.track?.key)
@@ -126,6 +127,8 @@ fun MainScreen(vm: AppViewModel) {
         vm.saveAutoFor?.let { SaveAutoSheet(vm, it) }
         vm.saveAlbumFor?.let { SaveAlbumSheet(vm, it) }
         vm.artistChoice?.let { ArtistChoiceSheet(vm, it) }
+        vm.failureFor?.let { FailureSheet(vm, it) }
+        vm.alternateFor?.let { AlternateSheet(vm, it) }
         Notice(vm, Modifier.align(Alignment.BottomCenter))
     }
 }
