@@ -273,8 +273,8 @@ test('SoundCloud: enlaces, claves, importar una lista y audio pedido para reenvo
         assert.equal((await s.call('POST', '/api/import/preview', { listId: list.id, url: 'https://soundcloud.com/forss/flickermood' })).body.error, 'not_a_playlist');
 
         await (await s.api('/api/stream/sc:290', { token: s.token })).arrayBuffer();
-        assert.deepEqual([s.open.calls.at(-1), s.open.options.at(-1)], ['https://api.soundcloud.com/tracks/290', { aacToAdts: true }]);
+        assert.deepEqual([s.open.calls.at(-1), s.open.options.at(-1)], ['https://api.soundcloud.com/tracks/290', { aacToAdts: true, attempt: 1 }]);
         await (await s.api('/api/stream/yt:dQw4w9WgXcQ', { token: s.token })).arrayBuffer();
-        assert.deepEqual(s.open.options.at(-1), { aacToAdts: undefined }, 'lo de YouTube se sirve tal cual');
+        assert.deepEqual(s.open.options.at(-1), { aacToAdts: undefined, attempt: 1 }, 'lo de YouTube se sirve tal cual');
     } finally { await s.close(); }
 });

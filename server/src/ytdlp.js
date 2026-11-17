@@ -22,13 +22,14 @@ export function commonArgs() {
 }
 
 /**
- * Lanza yt-dlp para una URL y devuelve su salida de audio en bruto.
- * @returns {{ stdout: import('stream').Readable, meta: Promise<object|null>, done: Promise<{code:number|null, stderr:string}>, kill: () => void }}
- *   - meta: datos del formato elegido (ext, filesize exacto si se conoce…), o null si yt-dlp no los dio.
- *   - done: se resuelve cuando el proceso ha terminado y ya no llegarán más datos.
+ * Argumentos de yt-dlp para sacar el audio de una URL. El primer intento va sin la «tele Samsung»
+ * (config.ytdlpFastClients): unos segundos menos por canción. Si falla, el reintento va como siempre.
  */
-export function openAudio(url, { aacToAdts = false } = {}) {
-    const args = [
+export function audioArgs(url, { attempt = 1 } = {}) {
+    const fast = attempt === 1 && !config.ytdlpPlayerClient && config.ytdlpFastClients
+        ? ['--extractor-args', `youtube:player_client=${config.ytdlpFastClients}`]
+        : [];
+    return [
         '-m', 'yt_dlp',
         '-f', FORMAT,
         '--no-playlist',
@@ -38,8 +39,20 @@ export function openAudio(url, { aacToAdts = false } = {}) {
         '--no-simulate',
         '-o', '-',
         ...commonArgs(),
+        ...fast,
         url,
     ];
+}
+
+/**
+ * Lanza yt-dlp para una URL y devuelve su salida de audio en bruto.
+ * `attempt` lo pasa AudioCache: 1 el primer intento, 2 el reintento.
+ * @returns {{ stdout: import('stream').Readable, meta: Promise<object|null>, done: Promise<{code:number|null, stderr:string}>, kill: () => void }}
+ *   - meta: datos del formato elegido (ext, filesize exacto si se conoce…), o null si yt-dlp no los dio.
+ *   - done: se resuelve cuando el proceso ha terminado y ya no llegarán más datos.
+ */
+export function openAudio(url, { aacToAdts = false, attempt = 1 } = {}) {
+    const args = audioArgs(url, { attempt });
     const child = spawn(config.ytdlpPython, args, { stdio: ['ignore', 'pipe', 'pipe'] });
     trackChild(child);       // su tiempo de procesador se apunta a quien pidió la canción
 

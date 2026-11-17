@@ -179,7 +179,7 @@ export class AudioCache {
         const started = Date.now();
         let source;
         try {
-            source = this.open(url, options);
+            source = this.open(url, { ...options, attempt });     // el reintento va por otro camino (ytdlp.js)
         } catch (error) {
             buffer.fail(error);
             this.#drop(buffer);

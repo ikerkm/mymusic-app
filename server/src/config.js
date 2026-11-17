@@ -8,7 +8,7 @@ const num = (v, def) => (v !== undefined && v !== '' && Number.isFinite(Number(v
 // antes de que index.js cargue el .env (lección del bot, 2026-09-18).
 export const config = {
     get root() { return ROOT; },
-    get version() { return '0.13.0'; },
+    get version() { return '0.13.1'; },
     get webDir() { return join(ROOT, 'web'); },
     get dataDir() { return process.env.MYMUSIC_DATA || join(ROOT, 'data'); },
     get host() { return process.env.MYMUSIC_HOST || '127.0.0.1'; },
@@ -21,6 +21,11 @@ export const config = {
     get ytdlpPython() { return process.env.YTDLP_PYTHON || (process.platform === 'win32' ? 'py' : 'python3'); },
     get ytdlpJsRuntime() { return process.env.YTDLP_JS_RUNTIME || ''; },
     get ytdlpPlayerClient() { return process.env.YTDLP_PLAYER_CLIENT || ''; },
+    // Clientes de YouTube del PRIMER intento de cada canción: los de yt-dlp menos la «tele Samsung». A esa
+    // YouTube le pone a menudo un anuncio que obliga a esperar 6 s, y sin ella yt-dlp ni resuelve el reto
+    // anti-bots (medido el 17-11, docs/RAPIDEZ.md). El reintento va con los de yt-dlp tal cual.
+    // Vacío = el primer intento también tal cual. Si YTDLP_PLAYER_CLIENT está puesto, manda él.
+    get ytdlpFastClients() { return process.env.YTDLP_FAST_CLIENTS ?? 'default,-tv_samsung'; },
     get ytdlpCookies() { return process.env.YTDLP_COOKIES || ''; },
     // Solo se usa para reenvolver el audio de SoundCloud (sin recodificar)
     get ffmpegPath() { return process.env.FFMPEG_PATH || 'ffmpeg'; },
