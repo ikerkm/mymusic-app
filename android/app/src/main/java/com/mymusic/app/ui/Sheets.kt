@@ -60,7 +60,7 @@ import com.mymusic.app.data.Track
  * de los botones de navegación para darles contraste; aquí sobra, porque la hoja ya es oscura.
  */
 @Composable
-private fun SheetWindowFix() {
+internal fun SheetWindowFix() {
     val view = LocalView.current
     SideEffect {
         val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
@@ -82,7 +82,8 @@ private fun Option(icon: ImageVector, label: String, tag: String = "", tint: Col
 
 /**
  * Pantalla 4 de la maqueta: el menú de una canción, el mismo en toda la app.
- * «Quitar de la lista» solo sale dentro de una lista. «Cambiar coincidencia» llega en la Fase 3.
+ * «Quitar de la lista» y «Cambiar coincidencia» solo salen dentro de una lista normal: en una lista
+ * automática (`autoKind`) no, porque esa lista no se toca a mano.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,7 +108,11 @@ fun TrackSheet(vm: AppViewModel, target: SheetTarget) {
             }
             Option(MmIcons.Play, "Reproducir ahora", "optPlay") {
                 close()
-                if (target.listId != null) vm.playList(target.listId, startKey = track.key) else vm.playTrack(track)
+                when {
+                    target.listId != null -> vm.playList(target.listId, startKey = track.key)
+                    target.autoKind != null -> vm.playAuto(target.autoKind, startKey = track.key)
+                    else -> vm.playTrack(track)
+                }
             }
             Option(MmIcons.Next, "A continuación", "optNext") {
                 close()

@@ -114,6 +114,11 @@ object MmIcons {
     val Swap = line("M4 8h14l-3-3M20 16H6l3 3")
     val Radio = line(dot(12f, 12f, 2f), "M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8")
 
+    // Listas automáticas y «Tus estadísticas» (mockups/estadisticas-v1.html)
+    val Trend = line("M3 17l6-6 4 4 8-8", "M15 7h6v6")
+    val Clock = line(dot(12f, 12f, 9f), "M12 7v5l3 2")
+    val Chart = line("M5 20V11M12 20V5M19 20v-6")
+
     // «Me gusta» (mockups/me-gusta-v1.html): solo el contorno si la canción no está, relleno si está
     private const val HEART = "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
     val Heart = line(HEART)

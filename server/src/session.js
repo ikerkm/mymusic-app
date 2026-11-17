@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from './fsutil.js';
 
@@ -280,6 +280,8 @@ export class SessionStore {
     }
 }
 
+const HISTORY_FILE = /^history-\d{4}\.jsonl$/;
+
 // Historial de lo escuchado: una línea JSON por canción, un archivo por año
 export class HistoryStore {
     constructor(dataDir, { now = Date.now } = {}) {
@@ -287,12 +289,48 @@ export class HistoryStore {
         this.now = now;
     }
 
+    // Lo ya leído de cada archivo, con su tamaño y fecha: si el archivo cambia, se vuelve a leer
+    #read = new Map();
+
     #path(year) { return join(this.dataDir, `history-${year}.jsonl`); }
 
     append({ track, source }) {
         const at = new Date(this.now());
         mkdirSync(this.dataDir, { recursive: true });
         appendFileSync(this.#path(at.getUTCFullYear()), JSON.stringify({ at: at.toISOString(), source, track }) + '\n');
+        this.#read.delete(`history-${at.getUTCFullYear()}.jsonl`);
+    }
+
+    /**
+     * Todo el historial, de todos los años (history-*.jsonl), de lo más antiguo a lo más reciente
+     * según el orden de los archivos. Se salta las líneas a medias y las que no traen fecha o
+     * canción. Lo devuelto se comparte entre llamadas: no se modifica.
+     */
+    all() {
+        let names;
+        try { names = readdirSync(this.dataDir).filter(name => HISTORY_FILE.test(name)).sort(); } catch { return []; }
+        const out = [];
+        for (const name of names) {
+            const path = join(this.dataDir, name);
+            let stat;
+            try { stat = statSync(path); } catch { continue; }
+            let known = this.#read.get(name);
+            if (!known || known.size !== stat.size || known.mtimeMs !== stat.mtimeMs) {
+                let text;
+                try { text = readFileSync(path, 'utf8'); } catch { continue; }
+                const entries = [];
+                for (const line of text.split('\n')) {
+                    if (!line) continue;
+                    let entry;
+                    try { entry = JSON.parse(line); } catch { continue; }      // línea a medias: se salta
+                    if (typeof entry?.at === 'string' && Number.isFinite(Date.parse(entry.at)) && typeof entry.track?.key === 'string') entries.push(entry);
+                }
+                known = { size: stat.size, mtimeMs: stat.mtimeMs, entries };
+                this.#read.set(name, known);
+            }
+            for (const entry of known.entries) out.push(entry);
+        }
+        return out;
     }
 
     // Lo más reciente primero. Mira el año en curso y, si hace falta, el anterior.

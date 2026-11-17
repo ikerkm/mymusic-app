@@ -237,11 +237,14 @@ const st = {
     user: null,
     version: '',
     lists: [],
-    view: { name: 'home' },      // home | search | list (id) | history
+    view: { name: 'home' },      // home | search | lists | list (id) | history | auto (id = kind) | stats
     session: null,               // la sesión tal como la da el servidor
     recent: [],
     history: [],
     list: null,
+    auto: null,                  // «Para ti» en Inicio: resumen de las listas automáticas y de 7 días (GET /auto)
+    autoList: null,              // la lista automática abierta (GET /auto/:kind)
+    stats: { period: '7', data: null, busy: false, error: null },      // «Tus estadísticas»
     search: { query: '', results: null, hint: null, busy: false, error: null },
     queue: { open: false, entries: [], count: 0, limit: 30 },
     full: false,                 // reproductor a pantalla completa (pantalla estrecha)
@@ -617,7 +620,8 @@ function markLiked(key, liked) {
     const hit = track => { if (track?.key === key) track.liked = liked; };
     const win = st.session?.window;
     for (const entry of [win?.prev, win?.current, win?.next, ...st.queue.entries]) hit(entry?.track);
-    for (const track of [pl.track, ...(st.list?.tracks ?? []), ...(st.search.results ?? []), ...st.recent, ...st.history]) hit(track);
+    for (const track of [pl.track, ...(st.list?.tracks ?? []), ...(st.autoList?.tracks ?? []), ...(st.stats.data?.topTracks ?? []),
+        ...(st.search.results ?? []), ...st.recent, ...st.history]) hit(track);
     updateBar();
 }
 
@@ -629,6 +633,7 @@ async function setLike(track, liked) {
     if (reply.liked) markSaved(track.key);
     await refreshLists();
     if (st.view.name === 'list' && st.view.id === reply.list?.id) loadList(reply.list.id);
+    else if (st.view.name === 'auto') loadAuto(st.view.id).catch(() => {});      // «en <lista>» / «sin guardar» cambia
     else if (st.view.name === 'lists' || st.view.name === 'home') renderMain();
 }
 const toggleLike = track => run(() => setLike(track, !track.liked), 'No se pudo cambiar el «me gusta». Prueba otra vez.');
@@ -792,7 +797,8 @@ function confirmDialog(title, text, label) {
 
 // ---------------------------------------------------------------- menú de una canción
 
-function trackMenu(track, { listId = null, play }) {
+// En una lista automática (`auto`) van las de siempre menos «Quitar de la lista» y «Cambiar coincidencia»
+function trackMenu(track, { listId = null, play, auto = false }) {
     const items = [
         { label: 'Reproducir', icon: 'play f', run: play },
         { label: 'Reproducir a continuación', icon: 'next f', run: () => enqueue(track, 'next') },
@@ -801,7 +807,7 @@ function trackMenu(track, { listId = null, play }) {
         { label: track.liked ? 'Quitar de «me gusta»' : 'Me gusta', icon: track.liked ? 'heart liked' : 'heart', run: () => setLike(track, !track.liked) },
         { label: 'Añadir a una lista…', icon: 'listadd', run: () => pickList(track) },
     ];
-    if (track.key.startsWith('sp:')) items.push({ label: 'Cambiar coincidencia…', icon: 'swap', run: () => openMatch(track) });
+    if (track.key.startsWith('sp:') && !auto) items.push({ label: 'Cambiar coincidencia…', icon: 'swap', run: () => openMatch(track) });
     if (listId) {
         items.push('sep', {
             label: 'Quitar de la lista', icon: 'bin', danger: true,
@@ -821,6 +827,7 @@ async function addToList(list, track) {
     markSaved(track.key);
     await refreshLists();
     if (st.view.name === 'list' && st.view.id === list.id) loadList(list.id);
+    else if (st.view.name === 'auto') loadAuto(st.view.id).catch(() => {});
 }
 
 function pickList(track) {
@@ -1514,7 +1521,7 @@ function renderSide() {
     const view = st.view;
     ui.side.replaceChildren(
         h('div.brand', null, h('b'), 'MyMusic'),
-        h('button.nav', { type: 'button', class: view.name === 'home' || view.name === 'history' ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
+        h('button.nav', { type: 'button', class: ['home', 'history', 'auto', 'stats'].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
         h('button.nav', { type: 'button', class: view.name === 'search' ? 'on' : '', onclick: () => go({ name: 'search' }) }, icon('search'), 'Buscar'),
         // En pantalla estrecha no hay barra lateral: las listas son la tercera pestaña
         h('button.nav.only-m', { type: 'button', class: view.name === 'lists' || view.name === 'list' ? 'on' : '', onclick: () => go({ name: 'lists' }) }, icon('lib'), 'Listas'),
@@ -1539,12 +1546,15 @@ async function createList() {
 /**
  * @param {object[]} tracks
  * @param {object} o  head: títulos de columna · number · platform · badge · menu · play(track) · listId · onMove(key, toIndex)
+ *   · auto (lista automática: menú sin quitar ni cambiar coincidencia) · cols [{head, cls, cell(track)}] (columnas de más) · cls
+ *   · en pantalla estrecha: line(track) (segunda línea), side(track) (a la derecha) y plain (sin la duración)
  */
 function trackTable(tracks, o) {
     if (mobile()) return trackRows(tracks, o);
+    const cols = o.cols ?? [];
     const head = o.head && h('thead', null, h('tr', null,
         o.number && h('th.n', null, '#'), h('th', null, 'Título'), h('th.a', null, 'Artista'),
-        o.platform && h('th.p'), h('th.r', null, 'Duración'), o.menu && h('th.m')));
+        o.platform && h('th.p'), cols.map(col => h('th', { class: col.cls }, col.head)), h('th.r', null, 'Duración'), o.menu && h('th.m')));
     let dragging = null;
     const rows = tracks.map((track, index) => {
         const play = () => o.play(track);
@@ -1552,13 +1562,17 @@ function trackTable(tracks, o) {
             event.preventDefault();
             const box = event.currentTarget.getBoundingClientRect();
             const byMouse = event.type === 'contextmenu';
-            openMenu(byMouse ? event.clientX : box.right - 210, byMouse ? event.clientY : box.bottom + 4, trackMenu(track, { listId: o.listId, play }));
+            openMenu(byMouse ? event.clientX : box.right - 210, byMouse ? event.clientY : box.bottom + 4, trackMenu(track, { listId: o.listId, play, auto: o.auto }));
         };
         const row = h('tr', { data: { key: track.key }, class: track.key === pl.key ? 'on' : '', ondblclick: () => run(play, 'No se pudo reproducir. Prueba otra vez.'), oncontextmenu: menu },
             o.number && h('td.n', null, String(index + 1)),
             h('td', null, h('div.t', null, cover(track.thumb, 's32', track.key), h('span', null, track.title))),
             h('td.a', null, track.artist ?? ''),
             o.platform && h('td.p', null, badge(track.platform), track.match === 'auto' ? h('span.auto', { title: 'Coincidencia en YouTube elegida automáticamente' }, '≈ automática') : null),
+            cols.map(col => {
+                const value = col.cell(track);
+                return h('td', { class: col.cls, title: typeof value === 'string' ? value : null }, value);
+            }),
             h('td.r', null, track.durationSec ? fmt(track.durationSec) : ''),
             o.menu && h('td.m', null, h('button.ib', { type: 'button', title: 'Más', onclick: menu }, icon('more', 'f'))));
         if (o.onMove) {
@@ -1580,7 +1594,7 @@ function trackTable(tracks, o) {
         }
         return row;
     });
-    return h('table', null, head, h('tbody', null, rows));
+    return h('table', { class: o.cls }, head, h('tbody', null, rows));
 }
 
 /**
@@ -1595,12 +1609,14 @@ function trackRows(tracks, o) {
             h('div.t', null,
                 h('b', null, track.title),
                 h('small', null,
-                    [track.artist, track.durationSec ? fmt(track.durationSec) : null].filter(Boolean).join(' · '),
+                    [track.artist, !o.plain && track.durationSec ? fmt(track.durationSec) : null].filter(Boolean).join(' · '),
                     o.badge && badge(track.platform),
-                    o.platform && track.match === 'auto' ? h('span.auto', null, '≈ automática') : null)),
+                    o.platform && track.match === 'auto' ? h('span.auto', null, '≈ automática') : null),
+                o.line && h('small', null, o.line(track))),
+            o.side && o.side(track),
             h('button.ib', { type: 'button', title: 'Más', onclick: event => {
                 event.stopPropagation();
-                openMenu(0, 0, trackMenu(track, { listId: o.listId, play }), track);
+                openMenu(0, 0, trackMenu(track, { listId: o.listId, play, auto: o.auto }), track);
             } }, icon('more', 'f')));
     });
     const box = h('div.rows', null, rows);
@@ -1623,10 +1639,12 @@ function go(view, { push = true } = {}) {
     st.view = view;
     renderSide();
     renderMain();
-    if (view.name === 'home') Promise.all([refreshLists(), refreshSession(), refreshRecent()]).then(() => st.view === view && renderMain()).catch(() => {});
+    if (view.name === 'home') Promise.all([refreshLists(), refreshSession(), refreshRecent(), refreshAuto()]).then(() => st.view === view && renderMain()).catch(() => {});
     if (view.name === 'lists') refreshLists().then(() => st.view === view && renderMain()).catch(() => {});
     if (view.name === 'list') loadList(view.id).catch(() => toast('No se pudo abrir la lista.'));
     if (view.name === 'history') loadHistory().catch(() => toast('No se pudo leer el historial.'));
+    if (view.name === 'auto') loadAuto(view.id).catch(() => toast('No se pudo abrir la lista.'));
+    if (view.name === 'stats') loadStats(st.stats.period);
 }
 
 // «Atrás» del navegador (en el móvil, el gesto o el botón): cierra lo que haya abierto encima y, si no hay nada, vuelve a la pantalla anterior
@@ -1664,7 +1682,7 @@ function renderMain() {
     const id = `${st.view.name}:${st.view.id ?? ''}`;
     const scroll = ui.shown === id ? ui.main.scrollTop : 0;
     ui.shown = id;
-    const build = { home: viewHome, search: viewSearch, lists: viewLists, list: viewList, history: viewHistory }[st.view.name] ?? viewHome;
+    const build = { home: viewHome, search: viewSearch, lists: viewLists, list: viewList, history: viewHistory, auto: viewAuto, stats: viewStats }[st.view.name] ?? viewHome;
     if (st.view.name === 'search' && ui.main.querySelector('.searchbox')) return renderSearchResults();     // sin tocar lo que se está escribiendo
     ui.main.replaceChildren(...build().flat(Infinity).filter(Boolean));
     ui.main.scrollTop = scroll;
@@ -1690,6 +1708,7 @@ function viewHome() {
             h('div.tx', null, h('b', null, 'Tu radio'), h('div.mut', null, radioStarting ? 'Buscando canciones parecidas…'
                 : [h('span.only-d', null, 'Canciones parecidas a lo que escuchas, sin repetir las tuyas'), h('span.only-m', null, 'Parecidas a lo que escuchas')])),
             h('button.btn', { type: 'button', title: 'Escuchar tu radio', disabled: radioStarting, onclick: startHomeRadio }, icon('play', 'f sm'), h('span.lbl', null, radioStarting ? 'Buscando…' : 'Escuchar'))),
+        paraTi(),
         st.lists.length > 0 && [
             h('div.sec', null, 'Tus listas'),
             h('div.cards', null, st.lists.map(list => h('button.card', { type: 'button', onclick: () => go({ name: 'list', id: list.id }) },
@@ -1840,6 +1859,303 @@ function viewHistory() {
     ];
 }
 
+// ---------------------------------------------------------------- «Para ti»: listas automáticas y estadísticas (mockups/estadisticas-v1.html)
+
+// Las listas automáticas son de solo lectura: el servidor las calcula al pedirlas, con el historial de
+// cada cuenta. No salen en Listas, ni en la barra lateral, ni en «Añadir a una lista…»; no se renombran,
+// no se quitan, no se importa en ellas ni se reordenan. «Guardar como lista» copia lo de ese momento.
+const AUTO_LOOK = {
+    top: { icon: 'trend', tone: 'au1', more: () => 'últimos 30 días' },
+    forgotten: { icon: 'clock', tone: 'au2', more: () => 'cambia cada día' },
+    radio: { icon: 'radio', tone: 'au3', more: auto => `${auto.unsaved ?? 0} sin guardar` },
+};
+const isAuto = kind => Object.hasOwn(AUTO_LOOK, kind);
+
+/** Carátula de una lista automática: su icono sobre su color, no una foto. */
+function autoCover(kind, size = '') {
+    const look = AUTO_LOOK[kind] ?? AUTO_LOOK.top;
+    return h('div', { class: `cv au ${look.tone} ${size}` }, icon(look.icon));
+}
+
+const times = n => (n === 1 ? '1 vez' : `${n} veces`);
+const artistsCount = n => (n === 1 ? '1 artista' : `${n} artistas`);
+const distinctSongs = n => (n === 1 ? '1 canción distinta' : `${n} canciones distintas`);
+
+/** Tiempo escuchado, como «6 h 20 min». */
+function fmtListened(ms) {
+    const seconds = Math.floor((ms ?? 0) / 1000);
+    if (seconds <= 0) return '0 min';
+    if (seconds < 60) return `${seconds} s`;
+    const minutes = Math.floor(seconds / 60);
+    return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+}
+// «d mmm» con los meses de tres letras, los mismos del servidor (stats.js, el «· 17 nov» de «Guardar como lista»)
+const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+const dayMonth = date => `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+/** Una hora ISO (UTC) como «d mmm» en hora local. */
+function localDay(iso) {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? '' : dayMonth(date);
+}
+/** «hoy», «ayer» o «d mmm», en hora local (el servidor da la hora en UTC). */
+function dayWhen(iso) {
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const diff = Math.round((day(new Date()) - day(date)) / 86400000);
+    return diff === 0 ? 'hoy' : diff === 1 ? 'ayer' : dayMonth(date);
+}
+/** Un día local AAAA-MM-DD (ya viene en hora local) como «d mmm». */
+function dayLabel(ymd) {
+    const [y, m, d] = String(ymd ?? '').split('-').map(Number);
+    return y && m && d ? dayMonth(new Date(y, m - 1, d)) : '';
+}
+
+async function refreshAuto() {
+    try {
+        st.auto = await api('GET', '/auto');
+    } catch (error) {
+        if (error.status === 404) st.auto = null;       // un servidor anterior: sin «Para ti»
+    }
+}
+
+/** Inicio, entre «Tu radio» y «Tus listas». Una lista automática sin canciones no sale. */
+function paraTi() {
+    if (!st.auto) return null;
+    const lists = (st.auto.lists ?? []).filter(item => isAuto(item.kind) && item.count > 0);
+    const week = st.auto.stats ?? {};
+    const openAuto = kind => go({ name: 'auto', id: kind });
+    const openStats = () => { st.stats.period = '7'; go({ name: 'stats' }); };
+    // Pantalla estrecha (pantalla 1): las listas en fila, que se desliza de lado, y debajo la tarjeta de las estadísticas
+    if (mobile()) {
+        return h('div.parati', null,
+            h('div.sec', null, 'Para ti'),
+            lists.length > 0 && h('div.hs', null, lists.map(item => h('button.ac', { type: 'button', data: { kind: item.kind }, onclick: () => openAuto(item.kind) },
+                autoCover(item.kind), h('b', null, item.name), h('small', null, songs(item.count))))),
+            h('button.statcard', { type: 'button', onclick: openStats },
+                h('div.stico', null, icon('chart')),
+                h('div.tx', null, h('b', null, 'Tus estadísticas'), h('div', null, `7 días: ${fmtListened(week.listenedMs)} · ${songs(week.songs ?? 0)}`)),
+                icon('chev', 'mut')));
+    }
+    // Escritorio (pantalla 7): cuatro tarjetas en la misma rejilla que las listas
+    return h('div.parati', null,
+        h('div.sec', null, 'Para ti'),
+        h('div.cards', null,
+            lists.map(item => h('button.card', { type: 'button', data: { kind: item.kind }, onclick: () => openAuto(item.kind) },
+                autoCover(item.kind), h('b', null, item.name), h('small', null, `${songs(item.count)} · ${AUTO_LOOK[item.kind].more(item)}`))),
+            h('button.card.st', { type: 'button', onclick: openStats },
+                h('div', null,
+                    h('small.sttl', null, icon('chart', 'sm'), 'Tus estadísticas'),
+                    h('div.big', null, fmtListened(week.listenedMs)),
+                    h('small', null, `${songs(week.songs ?? 0)} · ${artistsCount(week.artists ?? 0)}`)),
+                h('small', null, 'Últimos 7 días · Ver más ›'))));
+}
+
+// Pantallas 2-4: una lista automática abierta (en el escritorio, como una lista con «Guardar como lista» en vez de «Importar»)
+async function loadAuto(kind) {
+    const { list } = await api('GET', `/auto/${enc(kind)}`);
+    if (st.view.name !== 'auto' || st.view.id !== kind) return;
+    st.autoList = list;
+    renderMain();
+}
+
+async function playAuto(kind, startKey = null, shuffle = false) {
+    const { session } = await api('POST', '/session', { auto: kind, startKey, shuffle });
+    load(session);
+}
+
+/** Lo que dice cada fila, además de la canción: columnas en el escritorio; línea y marca en pantalla estrecha. */
+function autoRowParts(kind) {
+    if (kind === 'top') {
+        return {
+            cols: [{ head: 'Escuchas', cls: 'r w96', cell: track => times(track.plays ?? 0) }],
+            side: track => h('span.cnt', null, times(track.plays ?? 0)),
+        };
+    }
+    if (kind === 'forgotten') {
+        const last = track => (track.lastPlayedAt ? `última vez ${localDay(track.lastPlayedAt)}` : 'sin escuchas');
+        return {
+            cols: [
+                { head: 'Está en', cls: 'w140', cell: track => track.list?.name ?? '' },
+                { head: 'Última vez', cls: 'w110', cell: track => (track.lastPlayedAt ? localDay(track.lastPlayedAt) : 'sin escuchas') },
+            ],
+            line: track => [track.list?.name ? `en ${track.list.name}` : null, last(track)].filter(Boolean).join(' · '),
+        };
+    }
+    // radio: cuándo y qué radio la puso, y si está AHORA en alguna lista
+    const when = track => [dayWhen(track.at), track.via].filter(Boolean).join(' · ');
+    const saved = track => (track.savedIn
+        ? h('span.pill.kept', { title: `Está en «${track.savedIn.name}»` }, `en ${track.savedIn.name}`)
+        : h('span.pill.loose', null, 'sin guardar'));
+    return {
+        cols: [{ head: 'Cuándo', cls: 'w170', cell: when }, { head: 'En tus listas', cls: 'w110', cell: saved }],
+        line: when,
+        side: saved,
+    };
+}
+
+function viewAuto() {
+    const kind = st.view.id;
+    const list = st.autoList?.kind === kind ? st.autoList : null;
+    const summary = list ?? st.auto?.lists?.find(item => item.kind === kind) ?? null;
+    const count = summary?.count ?? 0;
+    const total = list ? list.tracks.reduce((sum, track) => sum + (track.durationSec ?? 0), 0) : 0;
+    const start = (key, shuffle) => run(() => playAuto(kind, key, shuffle), 'No se pudo reproducir. Prueba otra vez.');
+    const parts = autoRowParts(kind);
+    // Sin menú de lista (no se renombra ni se quita), sin «Importar» y sin arrastrar
+    return [
+        h('div.top.only-m', null,
+            h('button.ib', { type: 'button', title: 'Volver a Inicio', onclick: () => go({ name: 'home' }) }, icon('back')),
+            h('span.grow')),
+        h('div.listhead.autohead', null,
+            autoCover(kind, 's110'),
+            h('div.info', null,
+                h('div.kind', null, 'Lista automática'),
+                h('h3', null, summary?.name ?? 'Cargando…'),
+                h('div.mut', null, h('span.only-m', null, 'Automática · '), songs(count), total ? h('span.only-d', null, ` · ${fmtTotal(total)}`) : null),
+                list?.description && h('p.why', null, list.description),
+                h('div.acts', null,
+                    h('button.btn.pri', { type: 'button', disabled: count === 0, onclick: () => start(null, false) }, icon('play', 'f sm'), 'Reproducir'),
+                    h('button.btn', { type: 'button', title: 'Aleatorio', disabled: count === 0, onclick: () => start(null, true) }, icon('shuffle', 'sm'), h('span.only-d', null, 'Aleatorio')),
+                    h('button.btn.save', { type: 'button', title: 'Guardar como lista', disabled: !list || list.count === 0, onclick: () => saveAuto(list) },
+                        icon('listadd', 'sm'), h('span.only-d', null, 'Guardar como lista'), h('span.only-m', null, 'Guardar'))))),
+        !list ? h('p.empty', null, 'Cargando…')
+            : list.tracks.length === 0 ? h('p.empty', null, 'Todavía no hay canciones aquí: se irá llenando con lo que escuches.')
+                : trackTable(list.tracks, {
+                    head: true, number: mobile() ? kind === 'top' : true, platform: true, menu: true, auto: true, plain: true, cls: 'autot',
+                    cols: parts.cols, line: parts.line, side: parts.side,
+                    play: track => playAuto(kind, track.key, false),
+                }),
+    ];
+}
+
+/** «Guardar como lista» (pantalla 5): copia lo que hay ahora a una lista normal nueva, que ya no cambia sola. */
+function saveAuto(list) {
+    openModal(close => {
+        const input = h('input.in', { type: 'text', value: list.saveName ?? list.name, maxLength: 80, placeholder: 'Nombre de la lista' });
+        const error = h('div');
+        const save = h('button.btn.pri', { type: 'button' }, 'Guardar');
+        const accept = async () => {
+            const name = input.value.trim();
+            if (!name || save.disabled) return;
+            save.disabled = true;
+            try {
+                const { list: created } = await api('POST', `/auto/${enc(list.kind)}/save`, { name });
+                close();
+                await refreshLists();
+                go({ name: 'list', id: created.id });       // aparece en Listas y se abre
+            } catch (failure) {
+                save.disabled = false;
+                if (failure.status === 401) return;
+                error.replaceChildren(h('p.err', null, failure.code === 'empty_list' ? 'Ahora mismo no tiene canciones: no hay nada que guardar.' : 'No se pudo guardar. Prueba otra vez.'));
+            }
+        };
+        save.addEventListener('click', accept);
+        input.addEventListener('keydown', event => { if (event.key === 'Enter') accept(); });
+        setTimeout(() => input.select(), 0);
+        return [
+            h('h2', null, 'Guardar como lista'),
+            h('p.note', null, `Copia ${list.count === 1 ? 'la canción' : `las ${list.count} canciones`} de ahora a una lista nueva. Esa lista ya no cambia sola: es tuya, como las demás.`),
+            h('label', null, 'Nombre'),
+            input,
+            error,
+            h('div.acts.split', null, h('button.btn', { type: 'button', onclick: close }, 'Cancelar'), save),
+        ];
+    });
+}
+
+// Pantallas 6 y 8: «Tus estadísticas». Periodos = los últimos N días, no semanas ni meses del calendario.
+const STAT_PERIODS = [['7', '7 días'], ['30', '30 días'], ['all', 'Siempre']];
+
+async function loadStats(period) {
+    const s = st.stats;
+    s.period = period;
+    s.busy = true;
+    if (st.view.name === 'stats') renderMain();
+    try {
+        const data = await api('GET', `/stats?period=${enc(period)}`);
+        if (s.period !== period) return;
+        s.data = data;
+        s.error = null;
+    } catch (error) {
+        if (s.period !== period) return;
+        s.error = error.status === 401 ? null : 'No se pudieron leer las estadísticas. Prueba otra vez.';
+    }
+    s.busy = false;
+    if (st.view.name === 'stats') renderMain();
+}
+
+/** Tocar un artista: Buscar con su nombre (su propia página es otra idea, aparte). */
+function searchArtist(name) {
+    Object.assign(st.search, { query: name, results: null, hint: null, error: null });
+    go({ name: 'search' });
+    doSearch();
+}
+
+function viewStats() {
+    const s = st.stats;
+    const data = s.data;
+    const wide = !mobile();
+    const playStat = track => run(() => playTrack(track), 'No se pudo reproducir. Prueba otra vez.');
+    const num = (value, label) => h('div.num', null, h('b', null, value), h('small', null, label));
+    const tabs = h('div.pseg', { role: 'tablist' }, STAT_PERIODS.map(([value, label]) => h('button', {
+        type: 'button', role: 'tab', class: value === s.period ? 'on' : '', 'aria-selected': String(value === s.period),
+        onclick: () => { if (value !== s.period) loadStats(value); },
+    }, label)));
+    const none = h('p.empty', null, 'Nada escuchado en este periodo.');
+
+    const tracksPart = () => {
+        if (!data.topTracks?.length) return none.cloneNode(true);
+        if (wide) {
+            // Doble clic reproduce, como en las demás tablas del panel
+            return h('table.stat', null, h('tbody', null, data.topTracks.map((track, index) => h('tr', {
+                data: { key: track.key }, class: track.key === pl.key ? 'on' : '', title: 'Doble clic para reproducir', ondblclick: () => playStat(track),
+            },
+                h('td.n', null, String(index + 1)),
+                h('td', null, h('div.t', null, cover(track.thumb, 's30', track.key), h('span', null, track.title))),
+                h('td.a', null, track.artist ?? ''),
+                h('td.r', null, String(track.plays))))));
+        }
+        return h('div.rows', null, data.topTracks.map((track, index) => h('div.row.stat', { data: { key: track.key }, class: track.key === pl.key ? 'on' : '', onclick: () => playStat(track) },
+            h('span.n', null, String(index + 1)),
+            cover(track.thumb, 's34', track.key),
+            h('div.t', null, h('b', null, track.title), h('small', null, track.artist ?? '')),
+            h('span.cnt', null, String(track.plays)))));
+    };
+    const artistsPart = () => {
+        if (!data.topArtists?.length) return none.cloneNode(true);
+        if (wide) {
+            return h('table.stat.arts', null, h('tbody', null, data.topArtists.map((artist, index) => h('tr.go', { title: `Buscar «${artist.name}»`, onclick: () => searchArtist(artist.name) },
+                h('td.n', null, String(index + 1)),
+                h('td', null, h('div.t', null, cover(artist.thumb, 's30 av', artist.name), h('span', null, artist.name))),
+                h('td.a', null, songs(artist.songs)),
+                h('td.r', null, String(artist.plays))))));
+        }
+        return h('div.rows', null, data.topArtists.map((artist, index) => h('div.row.stat.art', { onclick: () => searchArtist(artist.name) },
+            h('span.n', null, String(index + 1)),
+            cover(artist.thumb, 's34 av', artist.name),
+            h('div.t', null, h('b', null, artist.name), h('small', null, distinctSongs(artist.songs))),
+            h('span.cnt', null, String(artist.plays)))));
+    };
+
+    return [
+        h('div.top', null, h('button.ib', { type: 'button', title: 'Volver a Inicio', onclick: () => go({ name: 'home' }) }, icon('back')), h('h3', null, 'Tus estadísticas')),
+        tabs,
+        s.error && h('p.err', null, s.error),
+        !data ? h('p.empty', null, s.error ? '' : 'Cargando…') : h('div.stats', { class: s.busy ? 'busy' : '', data: { period: data.period } },
+            h('div.nums', null,
+                num(fmtListened(data.listenedMs), 'escuchado'),
+                num(String(data.songs ?? 0), wide ? 'canciones distintas' : 'canciones'),
+                num(String(data.artists ?? 0), wide ? 'artistas distintos' : 'artistas')),
+            h('p.since', null, data.listenedSince
+                ? `El tiempo se mide desde el ${dayLabel(data.listenedSince)}; las escuchas, desde que hay historial.`
+                : 'El tiempo escuchado aún no se ha medido; las escuchas cuentan desde que hay historial.'),
+            h('div.two', null,
+                h('div', null, h('div.sec', null, 'Canciones más escuchadas'), tracksPart()),
+                h('div', null, h('div.sec', null, 'Artistas más escuchados'), artistsPart()))),
+    ];
+}
+
 // ---------------------------------------------------------------- cola (panel lateral de la pantalla 4)
 
 function toggleQueue() {
@@ -1944,7 +2260,8 @@ function showLogin(message = null) {
     closeAllOverlays();
     stopPlayer();
     ui = null;
-    Object.assign(st, { user: null, lists: [], session: null, recent: [], history: [], list: null, view: { name: 'home' } });
+    Object.assign(st, { user: null, lists: [], session: null, recent: [], history: [], list: null, auto: null, autoList: null, view: { name: 'home' } });
+    Object.assign(st.stats, { period: '7', data: null, busy: false, error: null });
     Object.assign(st.search, { query: '', results: null, hint: null, busy: false, error: null });
     st.queue.open = false;
     st.full = false;

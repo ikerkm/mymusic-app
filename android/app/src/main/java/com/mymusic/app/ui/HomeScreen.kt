@@ -36,7 +36,7 @@ import com.mymusic.app.UpdateState
 import com.mymusic.app.data.ListSummary
 import com.mymusic.app.playback.PlayerState
 
-/** Pantalla 2 de la maqueta: «Continuar», tus listas y lo escuchado hace poco. */
+/** Pantalla 2 de la maqueta: «Continuar», «Tu radio», «Para ti», tus listas y lo escuchado hace poco. */
 @Composable
 fun HomeScreen(vm: AppViewModel, state: PlayerState) {
     val session = vm.session
@@ -80,6 +80,9 @@ fun HomeScreen(vm: AppViewModel, state: PlayerState) {
 
         // «Tu radio»: canciones parecidas a lo que escucha (hace falta haber escuchado algo o tener una lista)
         if (vm.lists.isNotEmpty() || vm.recent.isNotEmpty()) item { RadioCard(vm) }
+
+        // «Para ti»: las listas automáticas y «Tus estadísticas» (no sale si aún no hay nada)
+        item { ForYouSection(vm) }
 
         if (vm.lists.isNotEmpty()) {
             item { SectionLabel("Tus listas") }

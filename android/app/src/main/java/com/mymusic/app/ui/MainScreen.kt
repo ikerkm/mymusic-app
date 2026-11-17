@@ -61,6 +61,13 @@ fun MainScreen(vm: AppViewModel) {
 
     LaunchedEffect(Unit) { vm.refreshHome() }
     BackHandler(enabled = top != null) { vm.back() }
+    // Tocar un artista en «Tus estadísticas» lleva a Buscar con su nombre
+    LaunchedEffect(vm.showSearch) {
+        if (vm.showSearch) {
+            tab = Tab.Search
+            vm.showSearch = false
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Mm.Bg)) {
         when {
@@ -70,6 +77,8 @@ fun MainScreen(vm: AppViewModel) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (top) {
                         is Overlay.ListDetail -> ListDetailScreen(vm, top.id, state)
+                        is Overlay.AutoList -> AutoListScreen(vm, top.kind, state)
+                        Overlay.Stats -> StatsScreen(vm, state)
                         Overlay.History -> HistoryScreen(vm, state)
                         Overlay.Settings -> SettingsScreen(vm)
                         Overlay.Trash -> TrashScreen(vm)
@@ -110,6 +119,7 @@ fun MainScreen(vm: AppViewModel) {
         vm.importFor?.let { ImportSheet(vm, it) }
         vm.matchFor?.let { MatchSheet(vm, it) }
         vm.restoreFor?.let { RestorePicker(vm, it) }
+        vm.saveAutoFor?.let { SaveAutoSheet(vm, it) }
         Notice(vm, Modifier.align(Alignment.BottomCenter))
     }
 }

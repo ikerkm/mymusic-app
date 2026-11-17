@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 import { readJson, writeJsonAtomic } from './fsutil.js';
@@ -167,6 +167,27 @@ export class Usage {
             this.childCpuMs += Number(counters.cpuMs) || 0;
         }
         this.dirty.add(month);
+    }
+
+    /**
+     * Los contadores de un usuario por día local («AAAA-MM-DD» → contadores), de todos los meses
+     * guardados y de lo que aún no se ha guardado (para «Tus estadísticas»).
+     */
+    daysOf(userId) {
+        const months = new Set(this.months.keys());
+        let files = [];
+        try { files = readdirSync(this.dir); } catch { /* aún no hay nada apuntado */ }
+        for (const file of files) {
+            const match = /^users-(\d{4}-\d{2})\.json$/.exec(file);
+            if (match) months.add(match[1]);
+        }
+        const out = {};
+        for (const month of [...months].sort()) {
+            let users;
+            try { users = this.#month(month); } catch { continue; }      // un mes ilegible no tira las estadísticas
+            Object.assign(out, users?.[userId] ?? {});
+        }
+        return out;
     }
 
     busy(running, waiting = 0) {

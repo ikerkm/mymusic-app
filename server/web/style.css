@@ -398,3 +398,82 @@ div.pick{cursor:default}
 .usecard.tot{border-top:1px solid var(--line)}
 .m .facts{grid-template-columns:1fr 1fr}
 .m .fact b{font-size:15px}
+
+/* ====================================================================================
+   «Para ti»: listas automáticas (de solo lectura) y «Tus estadísticas»
+   (mockups/estadisticas-v1.html: pantallas 1-6 en pantalla estrecha, 7-8 en el escritorio).
+   ==================================================================================== */
+:root{--a1:#9d8cff; --a1d:#1b1640; --a2:#5fd4c4; --a2d:#0f2a2a; --a3:#ff9a4a; --a3d:#2c1a0e}
+/* carátulas de las listas automáticas: un icono sobre su color, no una foto */
+.cv.au{display:flex;align-items:center;justify-content:center;border:1px solid}
+.au1{background:var(--a1d);border-color:var(--a1);color:var(--a1)}
+.au2{background:var(--a2d);border-color:var(--a2);color:var(--a2)}
+.au3{background:var(--a3d);border-color:var(--a3);color:var(--a3)}
+.cv.au .ic{width:30px;height:30px}
+.s110.au .ic{width:40px;height:40px}
+.s30{width:30px;height:30px;border-radius:6px}
+.cv.av{border-radius:50%}
+
+/* Inicio en el escritorio: la tarjeta de las estadísticas, en la misma rejilla que las demás */
+.card.st{display:flex;flex-direction:column;justify-content:space-between;gap:10px}
+.card.st small.sttl{display:flex;align-items:center;gap:6px;color:var(--acc);font-weight:650}
+.card.st .big{font-size:26px;font-weight:700;letter-spacing:-.5px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* lista automática abierta */
+.why{color:var(--mut);font-size:12.5px;line-height:1.45;margin-top:8px;max-width:90ch}
+/* columnas de más (escuchas, lista, cuándo…): se le quita ancho al artista y a la plataforma para que el título quepa */
+table.autot td.a,table.autot th.a{width:16%}
+table.autot td.p,table.autot th.p{width:120px}
+.w96{width:96px}.w110{width:110px}.w140{width:140px}.w170{width:170px}
+.pill{display:inline-block;max-width:100%;font-size:10.5px;font-weight:650;padding:1px 8px;border-radius:99px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.pill.kept{background:#6fdc9a22;color:var(--ok)}
+.pill.loose{background:#ff9a4a22;color:var(--sc)}
+
+/* «Tus estadísticas» */
+.pseg{display:flex;background:var(--sur);border-radius:99px;padding:3px;margin-top:14px;max-width:330px}
+.pseg button{flex:1;text-align:center;padding:6px 0;border-radius:99px;font-size:12.5px;font-weight:600;color:var(--mut)}
+.pseg button:hover{color:var(--tx)}
+.pseg button.on{background:var(--sur2);color:var(--tx)}
+.nums{display:grid;grid-template-columns:repeat(3,200px);gap:8px;margin-top:12px}
+.num{background:var(--sur);border-radius:12px;padding:10px 12px;min-width:0}
+.num b{display:block;font-size:19px;font-weight:700;letter-spacing:-.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.num small{color:var(--mut);font-size:11.5px}
+.since{color:var(--mut);font-size:11.5px;margin-top:8px}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:26px}
+.stats.busy{opacity:.55}
+table.stat{margin-top:4px}
+table.stat td.a{width:34%}
+table.stat td.r{width:56px;font-variant-numeric:tabular-nums}
+table.stat tr.go{cursor:pointer}
+
+/* pantalla estrecha: las listas en fila que se desliza y la tarjeta de las estadísticas (pantalla 1) */
+.hs,.ac,.statcard{display:none}
+.m .hs{display:flex;gap:8px;overflow-x:auto;margin-right:-16px;padding-right:16px;scrollbar-width:none;overscroll-behavior-x:contain}
+.m .hs::-webkit-scrollbar{display:none}
+.m .ac{display:block;flex:none;width:100px;text-align:left}
+.m .ac .cv{width:100px;height:100px;border-radius:12px}
+.m .ac .cv .ic{width:34px;height:34px}
+.m .ac b{display:block;font-size:13px;font-weight:600;margin-top:6px;line-height:1.25}
+.m .ac small{display:block;color:var(--mut);font-size:11.5px}
+.m .statcard{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--sur);border-radius:16px;padding:10px 12px;margin-top:10px}
+.m .statcard .stico{width:34px;height:34px;border-radius:9px;background:var(--sur2);color:var(--acc);display:flex;align-items:center;justify-content:center;flex:none}
+.m .statcard .tx{flex:1;min-width:0}
+.m .statcard b{display:block;font-size:14px}
+.m .statcard .tx div{font-size:12.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m .statcard > .ic{width:16px;height:16px}
+
+/* pantalla estrecha: lista automática (pantallas 2-4) y estadísticas (pantalla 6) */
+.m .why{grid-column:1/-1;font-size:12.5px;margin-top:4px;line-height:1.4}
+.m .listhead .cv.au .ic{width:30px;height:30px}
+.m .row .cnt{flex:none;font-size:12.5px;color:var(--mut);font-variant-numeric:tabular-nums}
+.m .row .pill{flex:none;max-width:36%}
+.m .row.stat{min-height:46px;padding:4px 0}
+.m .pseg{max-width:none;margin-top:8px}
+.m .pseg button{padding:8px 0;font-size:13px}
+.m .nums{grid-template-columns:1.25fr 1fr 1fr}
+.m .num{padding:10px}
+.m .num b{font-size:17px}
+.m .num small{font-size:12px}
+.m .since{font-size:12px}
+.m .two{grid-template-columns:minmax(0,1fr);gap:0}
+.m .modal .acts.split .btn{flex:1;justify-content:center}

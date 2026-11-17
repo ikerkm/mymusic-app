@@ -6,6 +6,7 @@ import { LikeSet } from './likes.js';
 import { cleanTrack } from './lists.js';
 import { RADIO_SEEDS, SongSet } from './radio.js';
 import { parseKey, parseLink } from './sources.js';
+import { Listening, isAutoKind, isPeriod } from './stats.js';
 import { note, who } from './usage.js';
 import { explain } from './ytdlp.js';
 
@@ -347,6 +348,54 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         res.json({ list: req.ctx.lists.summaryOf(list) });
     });
 
+    // --- Listas automáticas y «Tus estadísticas» ---
+    // Se calculan en cada petición con el historial entero del usuario, sus listas y su consumo
+    // (stats.js). Son de solo lectura: no salen en /lists y no se renombran, ni se importa en ellas.
+    const listeningOf = req => new Listening({
+        history: req.ctx.history.all(),
+        lists: req.ctx.lists.full(),
+        audioKeyOf,
+        usageDays: usage?.daysOf(req.user.id) ?? {},
+        userId: req.user.id,
+        thumbOf: track => show(track).thumb ?? null,
+    });
+    // Cada canción, como en las demás pantallas (`liked`, carátula de la coincidencia) y con los datos de su fila
+    const rowsShown = (req, rows) => {
+        const shown = showFor(req.ctx);
+        return rows.map(({ track, ...row }) => ({ ...shown(track), ...row }));
+    };
+
+    priv.get('/auto', (req, res) => res.json(listeningOf(req).summary()));
+
+    priv.get('/auto/:kind', (req, res) => {
+        const auto = listeningOf(req).auto(req.params.kind);
+        if (!auto) return res.status(404).json({ error: 'auto_not_found' });
+        const { rows, ...summary } = auto;
+        res.json({ list: { ...summary, tracks: rowsShown(req, rows) } });
+    });
+
+    // «Guardar como lista»: copia lo que hay ahora a una lista normal nueva, que ya no cambia sola
+    priv.post('/auto/:kind/save', (req, res) => {
+        const auto = listeningOf(req).auto(req.params.kind);
+        if (!auto) return res.status(404).json({ error: 'auto_not_found' });
+        const name = req.body?.name === undefined ? auto.saveName : req.body.name;
+        if (typeof name !== 'string' || !name.trim()) return res.status(400).json({ error: 'bad_name' });
+        if (auto.count === 0) return res.status(400).json({ error: 'empty_list' });
+        const tracks = auto.rows.map(row => row.track);
+        matches?.remember(tracks);
+        const created = req.ctx.lists.create(name);
+        const { list } = req.ctx.lists.addTracks(created.id, tracks);
+        log(`[listas] ${req.user.name} guarda «${auto.name}» como «${list.name}» (${list.tracks.length} canciones)`);
+        res.status(201).json({ list: req.ctx.lists.summaryOf(list) });
+    });
+
+    priv.get('/stats', (req, res) => {
+        const period = req.query.period === undefined ? '7' : String(req.query.period);
+        if (!isPeriod(period)) return res.status(400).json({ error: 'bad_period' });
+        const stats = listeningOf(req).stats(period);
+        res.json({ ...stats, topTracks: rowsShown(req, stats.topTracks) });
+    });
+
     // --- Sesión de escucha ---
     // Tras cada cambio: la canción actual y la siguiente quedan fijadas en memoria, y la siguiente se
     // prepara si el usuario se queda unos segundos en la actual.
@@ -375,7 +424,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     // canción por detrás de la que suena se añade una tanda. De dónde salen las parecidas:
     //   · sesión de una lista → de canciones de esa lista, y nunca canciones que ya estén en ella;
     //   · «Tu radio» (Inicio) → de lo que el usuario ha elegido últimamente y de sus listas;
-    //   · canción suelta o búsqueda → de lo que el usuario ha puesto en esa sesión.
+    //   · canción suelta, búsqueda o lista automática → de lo que el usuario ha puesto en esa sesión.
     const RADIO_RETRY_MS = 30_000;
     const radioRuns = new Map();             // por usuario: { busy, status, sessionId, count, at }
     const radioState = userId => {
@@ -526,6 +575,21 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             if (first.tracks.length === 0) return res.status(422).json({ error: first.seeds ? 'radio_empty' : 'no_seeds' });
             log(`[radio] «Tu radio» de ${req.user.name}: empieza con ${first.tracks.length} canciones`);
             return reply(req, res, req.ctx.sessions.start({ source: { type: 'radio', name: 'Tu radio' }, tracks: first.tracks, device: req.device.id }));
+        }
+        // Una lista automática: se calcula ahora y suena como una lista (con la radio, de lo que haya en la sesión)
+        if (body.auto !== undefined) {
+            const auto = isAutoKind(body.auto) ? listeningOf(req).auto(body.auto) : null;
+            if (!auto) return res.status(404).json({ error: 'auto_not_found' });
+            if (auto.count === 0) return res.status(400).json({ error: 'empty_list' });
+            const tracks = auto.rows.map(row => row.track);
+            matches?.remember(tracks);
+            return reply(req, res, req.ctx.sessions.start({
+                source: { type: 'auto', id: auto.kind, name: auto.name },
+                tracks,
+                startKey: typeof body.startKey === 'string' ? body.startKey : null,
+                shuffle: body.shuffle === true,
+                device: req.device.id,
+            }));
         }
         if (body.listId !== undefined) {
             const list = req.ctx.lists.get(body.listId);

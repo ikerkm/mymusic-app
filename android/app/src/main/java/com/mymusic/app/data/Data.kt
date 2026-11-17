@@ -100,6 +100,63 @@ data class ProbePart(val ok: Boolean, val ms: Long, val message: String?)
 /** Resultado de «Probar extracción»: si responde el buscador y si YouTube entrega audio. */
 data class ProbeResult(val search: ProbePart, val extract: ProbePart)
 
+// --- Listas automáticas y «Tus estadísticas» (mockups/estadisticas-v1.html) ---
+
+/** Una lista del usuario a la que se hace referencia desde una fila (en qué lista está una canción). */
+data class ListRef(val id: String, val name: String)
+
+/** Una lista automática en «Para ti». `kind`: top | forgotten | radio. `unsaved` solo en «radio». */
+data class AutoSummary(val kind: String, val name: String, val count: Int, val unsaved: Int = 0)
+
+/** Resumen de un periodo de «Tus estadísticas» (en Inicio, los últimos 7 días). */
+data class StatsBrief(val period: String, val listenedMs: Long, val songs: Int, val artists: Int, val plays: Int)
+
+/** «Para ti» en Inicio: las tres listas automáticas (también las vacías, que no se enseñan) y el resumen de 7 días. */
+data class AutoHome(val lists: List<AutoSummary>, val stats: StatsBrief?)
+
+/**
+ * Una fila de una lista automática: la canción y los datos que dicen por qué está ahí.
+ * - «top»: `plays`.
+ * - «forgotten»: `list` (en qué lista está) y `lastPlayedAt` (ISO UTC; null = sin escuchas).
+ * - «radio»: `at` (ISO UTC), `via` («Tu radio», «radio de …») y `savedIn` (la lista en que está ahora; null = sin guardar).
+ */
+data class AutoRow(
+    val track: Track,
+    val plays: Int? = null,
+    val list: ListRef? = null,
+    val lastPlayedAt: String? = null,
+    val at: String? = null,
+    val via: String? = null,
+    val savedIn: ListRef? = null,
+)
+
+/** Una lista automática abierta. `saveName` es el nombre propuesto para «Guardar como lista». */
+data class AutoDetail(
+    val kind: String,
+    val name: String,
+    val description: String,
+    val count: Int,
+    val saveName: String,
+    val unsaved: Int,
+    val rows: List<AutoRow>,
+)
+
+/** Un artista en «Artistas más escuchados». `songs` = canciones distintas; `thumb`, la de su canción más escuchada. */
+data class ArtistStat(val name: String, val plays: Int, val songs: Int, val thumb: String?)
+
+/** «Tus estadísticas» de un periodo: 7, 30 o all. `listenedSince` (AAAA-MM-DD): desde cuándo se mide el tiempo. */
+data class Stats(
+    val period: String,
+    val listenedMs: Long,
+    val listenedSince: String?,
+    val historySince: String?,
+    val plays: Int,
+    val songs: Int,
+    val artists: Int,
+    val topTracks: List<Pair<Track, Int>>,
+    val topArtists: List<ArtistStat>,
+)
+
 /** Versión de la app publicada en el servidor. */
 data class AppRelease(val versionCode: Int, val versionName: String, val sha256: String, val size: Long, val notes: String?)
 
@@ -149,6 +206,52 @@ private fun Track.toJson(): JSONObject = JSONObject()
 private fun JSONArray.tracks(): List<Track> = List(length()) { getJSONObject(it).toTrack() }
 
 private fun JSONObject.toSummary() = ListSummary(getString("id"), getString("name"), getInt("count"), optInt("durationSec"), str("thumb"), optBoolean("likes"))
+
+private fun JSONObject.ref(name: String): ListRef? =
+    if (!has(name) || isNull(name)) null else getJSONObject(name).let { ListRef(it.getString("id"), it.optString("name")) }
+
+private fun JSONObject.toAutoRow() = AutoRow(
+    track = toTrack(),
+    plays = if (has("plays")) optInt("plays") else null,
+    list = ref("list"),
+    lastPlayedAt = if (has("lastPlayedAt")) str("lastPlayedAt") else null,
+    at = if (has("at")) str("at") else null,
+    via = if (has("via")) str("via") else null,
+    savedIn = ref("savedIn"),
+)
+
+private fun JSONObject.toAutoDetail(): AutoDetail {
+    val rows = getJSONArray("tracks")
+    return AutoDetail(
+        kind = getString("kind"),
+        name = optString("name"),
+        description = optString("description"),
+        count = optInt("count"),
+        saveName = optString("saveName", optString("name")),
+        unsaved = optInt("unsaved"),
+        rows = List(rows.length()) { rows.getJSONObject(it).toAutoRow() },
+    )
+}
+
+private fun JSONObject.toStatsBrief() = StatsBrief(optString("period", "7"), optLong("listenedMs"), optInt("songs"), optInt("artists"), optInt("plays"))
+
+private fun JSONObject.toStats(): Stats {
+    val tracks = optJSONArray("topTracks") ?: JSONArray()
+    val artists = optJSONArray("topArtists") ?: JSONArray()
+    return Stats(
+        period = optString("period", "7"),
+        listenedMs = optLong("listenedMs"),
+        listenedSince = str("listenedSince"),
+        historySince = str("historySince"),
+        plays = optInt("plays"),
+        songs = optInt("songs"),
+        artists = optInt("artists"),
+        topTracks = List(tracks.length()) { tracks.getJSONObject(it).let { t -> t.toTrack() to t.optInt("plays") } },
+        topArtists = List(artists.length()) {
+            artists.getJSONObject(it).let { a -> ArtistStat(a.optString("name"), a.optInt("plays"), a.optInt("songs"), a.str("thumb")) }
+        },
+    )
+}
 
 private fun JSONObject.entry(name: String): Entry? =
     if (isNull(name)) null else getJSONObject(name).let { Entry(it.getInt("index"), it.getJSONObject("track").toTrack()) }
@@ -402,6 +505,33 @@ class Api(private val prefs: Prefs) {
     suspend fun history(limit: Int, distinct: Boolean): List<Track> =
         call("GET", "/api/history?limit=$limit" + if (distinct) "&distinct=1" else "").getJSONArray("entries")
             .let { a -> List(a.length()) { a.getJSONObject(it).getJSONObject("track").toTrack() } }
+
+    // --- Listas automáticas y «Tus estadísticas» ---
+
+    /** «Para ti»: las tres listas automáticas (top, forgotten, radio) y el resumen de los últimos 7 días. */
+    suspend fun autoHome(): AutoHome = call("GET", "/api/auto").let { o ->
+        val lists = o.getJSONArray("lists")
+        AutoHome(
+            lists = List(lists.length()) { i ->
+                lists.getJSONObject(i).let { AutoSummary(it.getString("kind"), it.optString("name"), it.optInt("count"), it.optInt("unsaved")) }
+            },
+            stats = o.optJSONObject("stats")?.toStatsBrief(),
+        )
+    }
+
+    /** Una lista automática, calculada en el momento con el historial del usuario. */
+    suspend fun auto(kind: String): AutoDetail = call("GET", "/api/auto/${enc(kind)}").getJSONObject("list").toAutoDetail()
+
+    /** «Guardar como lista»: copia lo que hay ahora en la automática a una lista normal nueva. */
+    suspend fun saveAuto(kind: String, name: String): ListSummary =
+        call("POST", "/api/auto/${enc(kind)}/save", JSONObject().put("name", name)).getJSONObject("list").toSummary()
+
+    suspend fun startAuto(kind: String, startKey: String?, shuffle: Boolean): SessionView =
+        call("POST", "/api/session", JSONObject().put("auto", kind).put("startKey", startKey ?: JSONObject.NULL).put("shuffle", shuffle))
+            .getJSONObject("session").toSession()
+
+    /** period: "7", "30" o "all" (últimos N días, hoy incluido). */
+    suspend fun stats(period: String): Stats = call("GET", "/api/stats?period=" + enc(period)).toStats()
 
     // --- Actualización de la app ---
 

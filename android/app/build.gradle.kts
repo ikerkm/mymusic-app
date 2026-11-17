@@ -22,8 +22,8 @@ android {
         minSdk = 26          // Android 8.0: cubre el Pocophone F1 (Android 10)
         targetSdk = 36
         // -PversionCodeOverride=N compila una versión «más vieja» para probar la actualización en el emulador
-        versionCode = (project.findProperty("versionCodeOverride") as String?)?.toInt() ?: 8
-        versionName = "0.8.0"
+        versionCode = (project.findProperty("versionCodeOverride") as String?)?.toInt() ?: 9
+        versionName = "0.9.0"
     }
 
     signingConfigs {

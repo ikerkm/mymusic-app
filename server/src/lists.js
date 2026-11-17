@@ -91,6 +91,14 @@ export class ListStore {
         return mine ? [{ ...mine, likes: true }, ...summaries.filter(list => list !== mine)] : summaries;
     }
 
+    /** Las listas enteras, con sus canciones, en el orden de all() (para las listas automáticas). */
+    full() {
+        const likes = this.likesId();
+        const stored = this.#stored();
+        const mine = stored.find(list => list.id === likes);
+        return mine ? [mine, ...stored.filter(list => list !== mine)] : stored;
+    }
+
     // --- «Me gusta» ---
     // La lista a la que va el corazón es una lista normal del usuario (se renombra, se importa en
     // ella, se manda a la papelera…). Cuál es queda apuntado en likes.json.

@@ -14,6 +14,8 @@ import androidx.lifecycle.viewModelScope
 import com.mymusic.app.data.Api
 import com.mymusic.app.data.ApiException
 import com.mymusic.app.data.AppRelease
+import com.mymusic.app.data.AutoDetail
+import com.mymusic.app.data.AutoHome
 import com.mymusic.app.data.Entry
 import com.mymusic.app.data.ImportPreview
 import com.mymusic.app.data.LikeResult
@@ -23,6 +25,7 @@ import com.mymusic.app.data.MatchInfo
 import com.mymusic.app.data.Prefs
 import com.mymusic.app.data.ProbeResult
 import com.mymusic.app.data.SessionView
+import com.mymusic.app.data.Stats
 import com.mymusic.app.data.Track
 import com.mymusic.app.data.Trash
 import com.mymusic.app.data.TrashedList
@@ -46,6 +49,10 @@ sealed interface Overlay {
     data object Settings : Overlay
     data object Trash : Overlay
     data class ListDetail(val id: String) : Overlay
+    /** Una lista automática de «Para ti»: top | forgotten | radio. */
+    data class AutoList(val kind: String) : Overlay
+    /** «Tus estadísticas». */
+    data object Stats : Overlay
 }
 
 /** En qué punto está la actualización de la app. */
@@ -73,8 +80,11 @@ sealed interface ProbeState {
     data class Failed(val message: String) : ProbeState
 }
 
-/** Canción sobre la que se ha abierto el menú. `listId` solo cuando se abre desde dentro de una lista. */
-data class SheetTarget(val track: Track, val listId: String? = null)
+/**
+ * Canción sobre la que se ha abierto el menú. `listId` solo cuando se abre desde dentro de una lista;
+ * `autoKind`, desde una lista automática (sin «Quitar de la lista» ni «Cambiar coincidencia»).
+ */
+data class SheetTarget(val track: Track, val listId: String? = null, val autoKind: String? = null)
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -148,6 +158,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var restoreFor by mutableStateOf<TrashedTrack?>(null)     // canción de la papelera para la que se elige lista
     var probe by mutableStateOf<ProbeState>(ProbeState.Idle)
         private set
+
+    // --- Listas automáticas y «Tus estadísticas» (mockups/estadisticas-v1.html) ---
+    var forYou by mutableStateOf<AutoHome?>(null)             // «Para ti» en Inicio; null con un servidor anterior
+        private set
+    var openAuto by mutableStateOf<AutoDetail?>(null)
+        private set
+    var saveAutoFor by mutableStateOf<AutoDetail?>(null)      // lista automática que se está guardando como lista normal
+    var statsPeriod by mutableStateOf("7")                    // 7 | 30 | all
+        private set
+    var stats by mutableStateOf<Stats?>(null)
+        private set
+    var statsError by mutableStateOf<String?>(null)
+        private set
+    var showSearch by mutableStateOf(false)                   // pide a la pantalla principal que pase a Buscar
 
     // --- «Me gusta» ---
     // Lo que se ha marcado o quitado en este dispositivo, por clave de canción. Solo hace falta para la
@@ -282,6 +306,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         trash = null
         restoreFor = null
         probe = ProbeState.Idle
+        forYou = null
+        openAuto = null
+        saveAutoFor = null
+        stats = null
+        statsError = null
+        statsPeriod = "7"
         loginError = message
         loggedIn = false
     }
@@ -296,6 +326,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Overlay.History -> run { history = api.history(100, distinct = false) }
             Overlay.Settings, Overlay.Trash -> loadTrash()       // en Ajustes, para decir cuánto hay en la papelera
             Overlay.Player -> Unit
+            is Overlay.AutoList -> loadAuto(overlay.kind)
+            Overlay.Stats -> loadStats("7")                       // se abre siempre en «7 días»
         }
     }
 
@@ -312,6 +344,85 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         recent = api.history(6, distinct = true)
         // Un servidor anterior a la radio no conoce esta dirección: la casilla se queda sin marcar
         runCatching { api.radio() }.onSuccess { radioOn = it }
+        // Ni a las listas automáticas: «Para ti» no sale
+        forYou = runCatching { api.autoHome() }.getOrNull()
+    }
+
+    // ------------------------------------------------------------------ listas automáticas y estadísticas
+
+    private fun loadAuto(kind: String) {
+        if (openAuto?.kind != kind) openAuto = null
+        run("No se pudo abrir la lista.") { openAuto = api.auto(kind).also { detail -> detail.rows.forEach { likeChanges.remove(it.track.key) } } }
+    }
+
+    // Lo guardado cambia «en <lista>» / «sin guardar» de «Descubierto en la radio» y los contadores de «Para ti»
+    private suspend fun refreshAuto() {
+        val kind = openAuto?.kind ?: return
+        if (overlays.none { it == Overlay.AutoList(kind) }) return
+        runCatching { api.auto(kind) }.onSuccess { if (openAuto?.kind == kind) openAuto = it }
+    }
+
+    /** Una lista automática, desde `startKey` o desde el principio; con `shuffle`, en orden aleatorio. */
+    fun playAuto(kind: String, startKey: String? = null, shuffle: Boolean = false) = viewModelScope.launch {
+        try {
+            start(api.startAuto(kind, startKey, shuffle))
+        } catch (e: ApiException) {
+            if (e.status == 401) logout(EXPIRED)
+            else notice = if (e.error == "empty_list") "Esta lista todavía no tiene canciones." else "No se pudo reproducir la lista."
+        } catch (e: Exception) {
+            notice = "Sin conexión con el servidor."
+        }
+    }
+
+    /**
+     * «Guardar como lista»: copia la automática a una lista normal nueva, que ya no cambia sola, y la abre.
+     * `done` recibe null si salió bien, o el mensaje de error (la hoja tapa los avisos de abajo).
+     */
+    fun saveAuto(kind: String, name: String, done: (String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val created = api.saveAuto(kind, name)
+                saveAutoFor = null
+                done(null)
+                lists = api.lists()
+                open(Overlay.ListDetail(created.id))
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED)
+                done(
+                    when (e.error) {
+                        "bad_name" -> "Ponle un nombre a la lista."
+                        "empty_list" -> "Esta lista no tiene canciones que guardar."
+                        else -> "No se pudo guardar la lista (${e.status})."
+                    }
+                )
+            } catch (e: Exception) {
+                done("Sin conexión con el servidor.")
+            }
+        }
+    }
+
+    /** Cambia el periodo de «Tus estadísticas»: "7", "30" o "all". */
+    fun loadStats(period: String) {
+        statsPeriod = period
+        statsError = null
+        viewModelScope.launch {
+            try {
+                val loaded = api.stats(period)
+                if (statsPeriod == period) stats = loaded
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED) else if (statsPeriod == period) statsError = "No se pudieron calcular las estadísticas."
+            } catch (e: Exception) {
+                if (statsPeriod == period) statsError = "Sin conexión con el servidor."
+            }
+        }
+    }
+
+    /** Tocar un artista en «Tus estadísticas»: Buscar con su nombre. */
+    fun searchFor(text: String) {
+        overlays.clear()
+        query = text
+        showSearch = true
+        search()
     }
 
     // ------------------------------------------------------------------ actualización de la app
@@ -481,6 +592,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         recent = recent.map { it.marked() }
         history = history.map { it.marked() }
         openList = openList?.let { it.copy(tracks = it.tracks.map { track -> track.marked() }) }
+        openAuto = openAuto?.let { it.copy(rows = it.rows.map { row -> row.copy(track = row.track.marked()) }) }
+        stats = stats?.let { it.copy(topTracks = it.topTracks.map { (track, plays) -> track.marked() to plays }) }
         session = session?.let { it.copy(prev = it.prev?.marked(), current = it.current?.marked(), next = it.next?.marked()) }
         for (i in queue.indices) queue[i] = queue[i].marked()
     }
@@ -498,6 +611,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lists = api.lists()
         val likesId = result.list?.id
         if (likesId != null && openList?.summary?.id == likesId) openList = api.list(likesId)
+        refreshAuto()
         // Guardada, deja de ser «de la radio»: la sesión y la cola lo reflejan
         if (result.liked && track.radio) {
             if (overlays.lastOrNull() == Overlay.Queue) loadQueue() else runCatching { api.session() }.getOrNull()?.let { session = it }
@@ -597,6 +711,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (thenAdd != null) api.addToList(created.id, thenAdd)
         lists = api.lists()
         notice = if (thenAdd != null) "Añadida a «${created.name}»" else null
+        if (thenAdd != null) refreshAuto()
     }
 
     fun renameList(id: String, name: String) = run("No se pudo renombrar.") {
@@ -623,6 +738,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         notice = if (added) "Añadida a «${list.name}»" else "Ya estaba en «${list.name}»"
         lists = api.lists()
         if (openList?.summary?.id == list.id) openList = api.list(list.id)
+        refreshAuto()
         // Guardada, deja de ser «de la radio»: la sesión y la cola lo reflejan
         if (track.radio) {
             if (overlays.lastOrNull() == Overlay.Queue) loadQueue() else runCatching { api.session() }.getOrNull()?.let { session = it }

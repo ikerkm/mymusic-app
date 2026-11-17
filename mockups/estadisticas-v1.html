@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyMusic — maqueta de estadísticas y listas automáticas</title>
+<style>
+:root{
+  --page:#15171c; --bg:#0d0e12; --side:#111318; --sur:#1a1c24; --sur2:#252834; --line:#2f3342;
+  --tx:#eef0f6; --mut:#9aa0b3; --acc:#9d8cff; --acc-d:#1b1640; --ok:#6fdc9a;
+  --yt:#ff6b6b; --sp:#4ad98a; --sc:#ff9a4a; --new:#ffd166;
+  --a1:#9d8cff; --a1d:#1b1640; --a2:#5fd4c4; --a2d:#0f2a2a; --a3:#ff9a4a; --a3d:#2c1a0e;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--tx);font:13px/1.4 "Segoe UI",Roboto,system-ui,sans-serif;padding:30px 24px 70px}
+header.top{max-width:1290px;margin:0 auto 26px}
+header.top h1{font-size:24px;font-weight:650;letter-spacing:-.3px}
+header.top p{color:var(--mut);margin-top:6px;max-width:86ch;font-size:14px}
+header.top ul{color:var(--mut);margin:10px 0 0 18px;max-width:86ch;font-size:13.5px;line-height:1.55}
+header.top li{margin-top:3px}
+header.top b{color:var(--tx)}
+h2.part{max-width:1290px;margin:10px auto 18px;font-size:17px;font-weight:650;color:var(--tx);border-bottom:1px solid var(--line);padding-bottom:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,300px);gap:40px 30px;justify-content:center;max-width:1290px;margin:0 auto 40px}
+.cell h2{font-size:14px;font-weight:650;margin-bottom:10px}
+.cell h2 span{color:var(--acc);margin-right:6px}
+.cell p.cap,.shot p.cap{color:var(--mut);font-size:12.5px;margin-top:10px;line-height:1.45}
+.cell p.cap b,.shot p.cap b{color:var(--tx)}
+.tag{display:inline-block;font-size:10px;font-weight:700;color:#201a00;background:var(--new);border-radius:99px;padding:1px 7px;margin-left:6px;vertical-align:1px;letter-spacing:.3px}
+.ring{outline:2px dashed var(--new);outline-offset:4px;border-radius:8px}
+
+/* ===== teléfono ===== */
+.ph{width:300px;height:640px;background:var(--bg);border:2px solid #343949;border-radius:34px;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.sb{height:28px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;padding:0 22px 3px;font-size:11px;font-weight:600;color:#d5d8e2}
+.scr{flex:1;min-height:0;overflow:hidden;padding:6px 16px 0;display:flex;flex-direction:column}
+.ic{width:20px;height:20px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ic.f{fill:currentColor;stroke:none}
+.ic.s{width:16px;height:16px}
+.mut{color:var(--mut)}
+.bar-top{display:flex;align-items:center;gap:10px;height:44px;flex:none}
+.bar-top h3{font-size:20px;font-weight:650;flex:1;letter-spacing:-.2px}
+.ph .sec{font-size:11px;font-weight:650;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;margin:14px 0 6px;display:flex;justify-content:space-between;flex:none}
+.ph .sec a{color:var(--acc);text-transform:none;letter-spacing:0;font-size:12px}
+
+.cv{flex:none;border-radius:8px;background:linear-gradient(135deg,#7b6cff,#ff7ac3)}
+.c2{background:linear-gradient(135deg,#19c3a6,#2b6cff)}
+.c3{background:linear-gradient(135deg,#ffb347,#ff5d6c)}
+.c4{background:linear-gradient(135deg,#3a3f5c,#8e9bd6)}
+.c5{background:linear-gradient(135deg,#d7ff6b,#22b573)}
+.c6{background:linear-gradient(135deg,#ff6bd6,#5b2bff)}
+.c7{background:linear-gradient(135deg,#5ee0ff,#7b6cff)}
+.c8{background:linear-gradient(135deg,#ff9a4a,#8a2be2)}
+/* carátulas de las listas automáticas: un icono, no una foto */
+.au{display:flex;align-items:center;justify-content:center;border:1px solid}
+.au1{background:var(--a1d);border-color:var(--a1);color:var(--a1)}
+.au2{background:var(--a2d);border-color:var(--a2);color:var(--a2)}
+.au3{background:var(--a3d);border-color:var(--a3);color:var(--a3)}
+
+.row{display:flex;align-items:center;gap:10px;padding:6px 0;flex:none}
+.row .cv{width:40px;height:40px}
+.row .n{width:16px;text-align:right;color:var(--mut);font-size:12px;flex:none}
+.row .t{flex:1;min-width:0}
+.row .t b{display:block;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t small{display:block;color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row > .ic{color:var(--mut)}
+.row .cnt{font-size:11.5px;color:var(--mut);flex:none;font-variant-numeric:tabular-nums}
+.row .av{width:36px;height:36px;border-radius:50%}
+.pill{display:inline-block;font-size:9.5px;font-weight:650;padding:0 6px;border-radius:99px;margin-left:4px;vertical-align:1px}
+.pill.in{background:#6fdc9a22;color:var(--ok)}
+.pill.out{background:#ff9a4a22;color:var(--sc)}
+
+.mini{flex:none;margin:6px 10px;background:var(--sur2);border-radius:14px;padding:8px 12px 9px 8px;display:flex;align-items:center;gap:10px;position:relative;overflow:hidden}
+.mini .cv{width:36px;height:36px}
+.mini .t{flex:1;min-width:0}
+.mini .t b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini .t small{color:var(--mut);font-size:11px}
+.mini::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:38%;background:var(--acc)}
+.pnav{flex:none;height:56px;display:flex;border-top:1px solid var(--line);background:var(--bg)}
+.pnav div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10.5px;color:var(--mut)}
+.pnav div.on{color:var(--acc)}
+
+.card{background:var(--sur);border-radius:16px;padding:12px;display:flex;align-items:center;gap:12px;flex:none}
+.card .tx{flex:1;min-width:0}
+.card .tx b{display:block;font-size:14px}
+.card .tx div{font-size:11.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:none}
+.tile{background:var(--sur);border-radius:10px;display:flex;align-items:center;gap:8px;overflow:hidden;font-weight:600;font-size:12.5px;padding-right:6px}
+.tile .cv{width:44px;height:44px;border-radius:0}
+.hs{display:flex;gap:8px;flex:none;margin-right:-16px;overflow:hidden}
+.ac{width:100px;flex:none}
+.ac .cv{width:100px;height:100px;border-radius:12px}
+.ac .cv .ic{width:34px;height:34px}
+.ac b{display:block;font-size:12.5px;font-weight:600;margin-top:6px;line-height:1.25}
+.ac small{display:block;color:var(--mut);font-size:11px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;padding:0 14px;border-radius:99px;background:var(--sur2);font-weight:600;font-size:13px;white-space:nowrap}
+.btn.pri{background:var(--acc);color:#14102e}
+.rbtn{width:38px;height:38px;border-radius:50%;background:var(--sur2);display:flex;align-items:center;justify-content:center;flex:none}
+.rbtn.pri{background:var(--acc);color:#14102e}
+.why{font-size:11.5px;color:var(--mut);margin-top:10px;line-height:1.4;flex:none}
+.seg{display:flex;background:var(--sur);border-radius:99px;padding:3px;flex:none;margin-top:4px}
+.seg div{flex:1;text-align:center;padding:6px 0;border-radius:99px;font-size:12px;font-weight:600;color:var(--mut)}
+.seg div.on{background:var(--sur2);color:var(--tx)}
+.nums{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:8px;margin-top:12px;flex:none}
+.num{background:var(--sur);border-radius:12px;padding:10px}
+.num b{display:block;font-size:17px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}
+.num small{color:var(--mut);font-size:11px}
+.dim{position:absolute;inset:0;background:#000b}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--sur);border-radius:22px 22px 0 0;padding:10px 16px 18px}
+.sheet::before{content:"";display:block;width:36px;height:4px;border-radius:9px;background:var(--line);margin:0 auto 12px}
+.field{background:var(--bg);border:1px solid var(--acc);border-radius:12px;padding:10px 12px;font-size:14px;margin-top:6px}
+.lbl{font-size:11.5px;color:var(--mut);margin-top:14px}
+
+/* ===== panel web (escritorio) ===== */
+.shot{max-width:1120px;margin:0 auto 46px}
+.shot h2{font-size:15px;font-weight:650;margin-bottom:10px}
+.shot h2 span{color:var(--acc);margin-right:6px}
+.win{border:1px solid #343949;border-radius:12px;overflow:hidden;background:var(--bg);position:relative}
+.win .ic{width:18px;height:18px}
+.win .bar{height:34px;background:#1d2029;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line)}
+.win .bar i{width:10px;height:10px;border-radius:50%;background:#3b4051}
+.win .bar .url{flex:1;max-width:420px;margin-left:10px;height:22px;border-radius:6px;background:#12141a;color:var(--mut);font-size:11.5px;display:flex;align-items:center;padding:0 10px}
+.win .app{display:grid;grid-template-columns:230px 1fr;grid-template-rows:1fr 76px;height:600px}
+.win .side{background:var(--side);border-right:1px solid var(--line);padding:16px 12px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.win .brand{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:700;margin:0 6px 14px}
+.win .brand b{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#ff6bd6,#5b2bff)}
+.win .nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-weight:600}
+.win .nav.on{background:var(--sur2);color:var(--tx)}
+.win .side h4{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--mut);margin:16px 10px 6px;display:flex;justify-content:space-between;align-items:center}
+.win .side h4 a{color:var(--acc);font-size:16px;line-height:1}
+.win .pl{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:8px;color:var(--tx)}
+.win .pl small{color:var(--mut);margin-left:auto}
+.win .who{margin-top:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--line);color:var(--mut)}
+.win .who b{width:26px;height:26px;border-radius:50%;background:var(--sur2);color:var(--tx);display:flex;align-items:center;justify-content:center;font-size:12px}
+.win .main{padding:20px 26px;overflow:hidden}
+.win .main h3{font-size:24px;font-weight:700;letter-spacing:-.3px}
+.win .sec{font-size:10.5px;font-weight:650;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;margin:18px 0 8px;display:flex;gap:10px;align-items:baseline}
+.win .sec a{color:var(--acc);text-transform:none;letter-spacing:0;font-size:12px;margin-left:auto}
+.win .banner{display:flex;align-items:center;gap:12px;background:var(--sur);border:1px solid #9d8cff77;border-radius:12px;padding:10px 14px;margin-top:12px}
+.win .banner.plain{border-color:var(--line)}
+.win .btn{height:34px}
+.win .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.win .wcard{background:var(--sur);border-radius:12px;padding:12px}
+.win .wcard .cv{width:100%;height:84px;border-radius:10px;margin-bottom:10px}
+.win .wcard .cv .ic{width:30px;height:30px}
+.win .wcard b{display:block}.win .wcard small{color:var(--mut)}
+.win .wcard.st{display:flex;flex-direction:column;justify-content:space-between}
+.win .wcard.st .big{font-size:26px;font-weight:700;letter-spacing:-.5px;margin-top:6px}
+.win table{width:100%;border-collapse:collapse;margin-top:4px}
+.win th{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--mut);text-align:left;font-weight:650;padding:6px 8px;border-bottom:1px solid var(--line)}
+.win td{padding:6px 8px;border-bottom:1px solid #1d2029;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
+.win td.n{color:var(--mut);width:30px;text-align:right}
+.win td .t{display:flex;align-items:center;gap:10px}
+.win td .t .cv{width:30px;height:30px;border-radius:6px}
+.win td .t .av{width:30px;height:30px;border-radius:50%}
+.win td.r{text-align:right;color:var(--mut);font-variant-numeric:tabular-nums}
+.win .two{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.win .seg{max-width:330px}
+.win .nums{grid-template-columns:repeat(3,200px)}
+.win .player{grid-column:1/3;background:#14161c;border-top:1px solid var(--line);display:grid;grid-template-columns:270px 1fr 270px;align-items:center;padding:0 18px;gap:16px}
+.win .now{display:flex;align-items:center;gap:12px;min-width:0}
+.win .now .cv{width:46px;height:46px}
+.win .now b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win .now small{color:var(--mut)}
+.win .ctl{display:flex;flex-direction:column;align-items:center;gap:7px}
+.win .ctl .bts{display:flex;align-items:center;gap:20px;color:var(--mut)}
+.win .ctl .bts .big{width:34px;height:34px;border-radius:50%;background:var(--acc);color:#14102e;display:flex;align-items:center;justify-content:center}
+.win .prog{display:flex;align-items:center;gap:10px;width:100%;font-size:11px;color:var(--mut)}
+.win .prog .tr{flex:1;height:4px;border-radius:9px;background:var(--sur2);position:relative}
+.win .prog .tr i{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:9px;background:var(--acc)}
+.win .right{display:flex;align-items:center;justify-content:flex-end;gap:14px;color:var(--mut)}
+.win .vol{width:86px;height:4px;border-radius:9px;background:var(--sur2);position:relative}
+.win .vol i{position:absolute;left:0;top:0;bottom:0;width:70%;border-radius:9px;background:var(--mut)}
+.win .radtile{width:44px;height:44px;border-radius:10px;background:var(--sur2);display:flex;align-items:center;justify-content:center;color:var(--acc);flex:none}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4.5" height="16" rx="1"/><rect x="13.5" y="4" width="4.5" height="16" rx="1"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 4l10 8-10 8z"/><rect x="17" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 4L9 12l10 8z"/><rect x="4.4" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 7h4l10 10h4M3 17h4l3-3M14 10l3-3h4M18 4l3 3-3 3M18 14l3 3-3 3"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12V9a3 3 0 0 1 3-3h11M20 12v3a3 3 0 0 1-3 3H6M15 3l3 3-3 3M9 15l-3 3 3 3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 6h13M4 11h13M4 16h7"/><path d="M15 14.5l5 3-5 3z"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-6"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M4 6h12M4 11h12M4 16h6M17 14v6M14 17h6"/></symbol>
+</svg>
+
+<header class="top">
+  <h1>MyMusic — maqueta de estadísticas y listas automáticas</h1>
+  <p>2026-11-17 · Borrador para aprobar. Es un <b>añadido</b> a las maquetas v1 de la app (<code>app-v1.html</code>) y del panel web (<code>web-v1.html</code>), no las sustituye: solo salen las pantallas que cambian o que son nuevas. Lo nuevo va marcado en amarillo. Canciones, artistas y cifras son de ejemplo.</p>
+  <ul>
+    <li><b>Dónde:</b> en Inicio, una sección nueva, «Para ti», debajo de «Tu radio». Trae las tres listas automáticas y la entrada a «Tus estadísticas». Listas, la barra lateral del panel, el reproductor y la pantalla de bloqueo no cambian.</li>
+    <li><b>Listas automáticas = solo de lectura:</b> se calculan al abrirlas, con el historial de cada cuenta (cada uno ve lo suyo). No salen en Listas ni en «Añadir a una lista…». No se pueden reordenar, importar ni quitar canciones. <b>«Guardar como lista»</b> (en el móvil el botón dice «Guardar») copia lo que hay en ese momento a una lista normal tuya, que ya no cambia sola.</li>
+    <li><b>La misma canción, venga de donde venga:</b> se cuenta como una sola aunque haya sonado por su versión de Spotify y por la de YouTube, igual que en el «me gusta».</li>
+    <li><b>Qué es una escucha:</b> una canción que pasa de 30 s, la misma regla que el historial. <b>El tiempo escuchado</b> sale de los contadores del consumo, que miden lo que avanza de verdad la canción. Esos contadores empiezan el 17 nov a las 12:19, así que antes de esa fecha no hay tiempo. Las escuchas cuentan desde que hay historial.</li>
+    <li><b>Periodos:</b> últimos 7 días, últimos 30 días y desde siempre (no semanas ni meses del calendario).</li>
+    <li><b>⚠ Historial corto:</b> solo hay un par de días. Las tres listas y las cifras irán cogiendo sentido con las semanas. Cuando una lista no tiene bastante, lo dice en vez de salir vacía sin más.</li>
+    <li><b>Panel web:</b> en el móvil, las pantallas 1-6, igual que en la app. En el PC, «Para ti» son cuatro tarjetas en Inicio (pantalla 7) y las estadísticas ocupan la zona principal (pantalla 8). Una lista automática se abre como cualquier lista, con «Guardar como lista» donde estaba «Importar».</li>
+  </ul>
+</header>
+
+<h2 class="part">App Android (y panel web en el móvil)</h2>
+<div class="grid">
+
+<!-- 1 INICIO -->
+<section class="cell">
+  <h2><span>1</span>Inicio <i class="tag">CAMBIA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><h3>Inicio</h3><svg class="ic"><use href="#i-set"/></svg></div>
+      <div class="sec" style="margin-top:4px">Continuar</div>
+      <div class="card">
+        <div class="cv" style="width:52px;height:52px;border-radius:10px"></div>
+        <div class="tx"><b>breakcore</b><div>Canción 14 de 212 · 1:32</div></div>
+        <div class="rbtn pri"><svg class="ic s f"><use href="#i-play"/></svg></div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        <div class="cv" style="width:52px;height:52px;border-radius:10px;background:var(--sur2);display:flex;align-items:center;justify-content:center;color:var(--acc)"><svg class="ic"><use href="#i-radio"/></svg></div>
+        <div class="tx"><b>Tu radio</b><div>Parecidas a lo que escuchas</div></div>
+        <div class="rbtn"><svg class="ic s f"><use href="#i-play"/></svg></div>
+      </div>
+      <div class="ring" style="margin-top:14px;flex:none">
+        <div class="sec" style="margin-top:0">Para ti</div>
+        <div class="hs">
+          <div class="ac"><div class="cv au au1"><svg class="ic"><use href="#i-trend"/></svg></div><b>Lo más escuchado</b><small>38 canciones</small></div>
+          <div class="ac"><div class="cv au au2"><svg class="ic"><use href="#i-clock"/></svg></div><b>Hace tiempo que no suena</b><small>50 canciones</small></div>
+          <div class="ac"><div class="cv au au3"><svg class="ic"><use href="#i-radio"/></svg></div><b>Descubierto en la radio</b><small>17 canciones</small></div>
+        </div>
+        <div class="card" style="margin-top:10px;padding:10px 12px">
+          <div style="width:34px;height:34px;border-radius:9px;background:var(--sur2);display:flex;align-items:center;justify-content:center;color:var(--acc);flex:none"><svg class="ic s"><use href="#i-chart"/></svg></div>
+          <div class="tx"><b style="font-size:13px">Tus estadísticas</b><div>7 días: 6 h 20 min · 92 canciones</div></div>
+          <svg class="ic s mut"><use href="#i-chev"/></svg>
+        </div>
+      </div>
+      <div class="sec">Tus listas</div>
+      <div class="tiles">
+        <div class="tile"><div class="cv"></div>breakcore</div>
+        <div class="tile"><div class="cv c2"></div>para currar</div>
+      </div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">«Para ti» va <b>entre «Tu radio» y «Tus listas»</b>. Las tres listas automáticas salen en fila (se desliza de lado si no caben) y, debajo, una tarjeta con el resumen de los últimos 7 días que abre «Tus estadísticas». Una lista que aún no tiene nada no sale. Lo demás de Inicio no cambia.</p>
+</section>
+
+<!-- 2 LO MÁS ESCUCHADO -->
+<section class="cell">
+  <h2><span>2</span>«Lo más escuchado» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><span style="flex:1"></span></div>
+      <div style="display:flex;gap:14px;align-items:center;flex:none">
+        <div class="cv au au1" style="width:76px;height:76px;border-radius:14px"><svg class="ic" style="width:30px;height:30px"><use href="#i-trend"/></svg></div>
+        <div style="min-width:0"><div style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.2">Lo más escuchado</div><div class="mut" style="font-size:12px">Automática · 38 canciones</div></div>
+      </div>
+      <div class="why">Lo que más veces ha sonado en los últimos 30 días, al menos 2 veces. Hasta 50.</div>
+      <div style="display:flex;gap:8px;margin:12px 0 6px;flex:none">
+        <div class="btn pri" style="flex:1"><svg class="ic s f"><use href="#i-play"/></svg>Reproducir</div>
+        <div class="btn" style="width:38px;padding:0"><svg class="ic s"><use href="#i-shuffle"/></svg></div>
+        <div class="btn ring"><svg class="ic s"><use href="#i-save"/></svg>Guardar</div>
+      </div>
+      <div class="row"><span class="n">1</span><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><span class="cnt">14 veces</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="n">2</span><div class="t"><b>Amen, Sister (2 a.m. edit)</b><small>Kettle Drift</small></div><span class="cnt">11 veces</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="n">3</span><div class="t"><b>Static Lullaby</b><small>Nine Volt Choir</small></div><span class="cnt">9 veces</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="n">4</span><div class="t"><b>Pixel Rain</b><small>Sora Kite</small></div><span class="cnt">7 veces</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="n">5</span><div class="t"><b>Night Bus to Nowhere</b><small>Lowlight Club</small></div><span class="cnt">6 veces</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="n">6</span><div class="t"><b>Soft Reset</b><small>Mira Vantablack</small></div><span class="cnt">6 veces</span><svg class="ic s"><use href="#i-more"/></svg></div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Se parece a una lista normal, pero <b>sin menú arriba</b> (no se renombra ni se quita), sin «Importar» y sin arrastrar. Cada fila dice <b>cuántas veces</b> ha sonado. En el menú de la canción salen las opciones de siempre <b>menos</b> «Quitar de la lista» y «Cambiar coincidencia».</p>
+</section>
+
+<!-- 3 HACE TIEMPO QUE NO SUENA -->
+<section class="cell">
+  <h2><span>3</span>«Hace tiempo que no suena» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><span style="flex:1"></span></div>
+      <div style="display:flex;gap:14px;align-items:center;flex:none">
+        <div class="cv au au2" style="width:76px;height:76px;border-radius:14px"><svg class="ic" style="width:30px;height:30px"><use href="#i-clock"/></svg></div>
+        <div style="min-width:0"><div style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.2">Hace tiempo que no suena</div><div class="mut" style="font-size:12px">Automática · 50 canciones</div></div>
+      </div>
+      <div class="why">50 canciones de tus listas que llevan más de 30 días sin sonar. Primero las que más tiempo llevan sin sonar; el resto se escoge cada día, y el mismo día no cambia.</div>
+      <div style="display:flex;gap:8px;margin:12px 0 6px;flex:none">
+        <div class="btn pri" style="flex:1"><svg class="ic s f"><use href="#i-play"/></svg>Reproducir</div>
+        <div class="btn" style="width:38px;padding:0"><svg class="ic s"><use href="#i-shuffle"/></svg></div>
+        <div class="btn"><svg class="ic s"><use href="#i-save"/></svg>Guardar</div>
+      </div>
+      <div class="row ring" style="margin:0 -4px;padding-left:4px;padding-right:4px"><div class="cv c3"></div><div class="t"><b>Tunnel Vision 174</b><small>DJ Okapi</small><small>en coche · última vez 2 oct</small></div><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c5"></div><div class="t"><b>Plastic Love (cover)</b><small>Aya Hoshino</small><small>en city pop · última vez 9 oct</small></div><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c2"></div><div class="t"><b>Low Orbit</b><small>Petal Engine</small><small>en para currar · sin escuchas</small></div><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c7"></div><div class="t"><b>Wired Saints</b><small>Kettle Drift</small><small>en breakcore · sin escuchas</small></div><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c6"></div><div class="t"><b>Halftime Heart</b><small>Sora Kite</small><small>en likes · sin escuchas</small></div><svg class="ic s"><use href="#i-more"/></svg></div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Mira <b>todas tus listas</b>, «likes» incluida. Cada fila dice en qué lista está y cuándo sonó por última vez. <b>⚠ Con el historial de ahora</b> casi ninguna ha sonado antes, así que de momento será sobre todo un repaso de tus listas que cambia cada día. Las fechas de octubre de la maqueta son de cuando ya haya historial.</p>
+</section>
+
+<!-- 4 DESCUBIERTO EN LA RADIO -->
+<section class="cell">
+  <h2><span>4</span>«Descubierto en la radio» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><span style="flex:1"></span></div>
+      <div style="display:flex;gap:14px;align-items:center;flex:none">
+        <div class="cv au au3" style="width:76px;height:76px;border-radius:14px"><svg class="ic" style="width:30px;height:30px"><use href="#i-radio"/></svg></div>
+        <div style="min-width:0"><div style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.2">Descubierto en la radio</div><div class="mut" style="font-size:12px">Automática · 17 canciones</div></div>
+      </div>
+      <div class="why">Lo que te puso la radio (la de Inicio o la de una lista) y escuchaste más de 30 s. Lo último, arriba. Hasta 100.</div>
+      <div style="display:flex;gap:8px;margin:12px 0 6px;flex:none">
+        <div class="btn pri" style="flex:1"><svg class="ic s f"><use href="#i-play"/></svg>Reproducir</div>
+        <div class="btn" style="width:38px;padding:0"><svg class="ic s"><use href="#i-shuffle"/></svg></div>
+        <div class="btn"><svg class="ic s"><use href="#i-save"/></svg>Guardar</div>
+      </div>
+      <div class="row ring" style="margin:0 -4px;padding-left:4px;padding-right:4px"><div class="cv c8"></div><div class="t"><b>Neon Cathedral</b><small>Vex Lumen</small><small>hoy · radio de breakcore</small></div><span class="pill out">sin guardar</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c6"></div><div class="t"><b>Sugarglass</b><small>Mira Vantablack</small><small>hoy · Tu radio</small></div><span class="pill in">en likes</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c7"></div><div class="t"><b>Afterimage 88</b><small>Lowlight Club</small><small>ayer · Tu radio</small></div><span class="pill out">sin guardar</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c2"></div><div class="t"><b>Breakwater</b><small>Halcyon Drift</small><small>ayer · radio de coche</small></div><span class="pill in">en coche</span><svg class="ic s"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c3"></div><div class="t"><b>Copper Moth</b><small>Petal Engine</small><small>ayer · Tu radio</small></div><span class="pill out">sin guardar</span><svg class="ic s"><use href="#i-more"/></svg></div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Sirve para <b>rescatar lo que te gustó de la radio</b>. Cada fila dice qué radio la puso y si ya la tienes en alguna lista, con cómo está <b>ahora</b>, no cuando sonó. Para guardarla: el corazón o «Añadir a una lista…» de su menú, como en cualquier sitio.</p>
+</section>
+
+<!-- 5 GUARDAR COMO LISTA -->
+<section class="cell">
+  <h2><span>5</span>«Guardar» → «Guardar como lista» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><span style="flex:1"></span></div>
+      <div style="display:flex;gap:14px;align-items:center;flex:none">
+        <div class="cv au au1" style="width:76px;height:76px;border-radius:14px"><svg class="ic" style="width:30px;height:30px"><use href="#i-trend"/></svg></div>
+        <div><div style="font-size:19px;font-weight:700;letter-spacing:-.3px;line-height:1.2">Lo más escuchado</div><div class="mut" style="font-size:12px">Automática · 38 canciones</div></div>
+      </div>
+    </div>
+    <div class="dim"></div>
+    <div class="sheet">
+      <div style="font-size:16px;font-weight:650">Guardar como lista</div>
+      <div class="mut" style="font-size:12px;margin-top:4px">Copia las 38 canciones de ahora a una lista nueva. Esa lista ya no cambia sola: es tuya, como las demás.</div>
+      <div class="lbl">Nombre</div>
+      <div class="field">Lo más escuchado · 17 nov</div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <div class="btn" style="flex:1">Cancelar</div>
+        <div class="btn pri" style="flex:1">Guardar</div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">El nombre viene puesto con la fecha y se puede cambiar. Al guardar, la lista nueva aparece en Listas y se abre. La automática sigue igual en «Para ti».</p>
+</section>
+
+<!-- 6 ESTADÍSTICAS -->
+<section class="cell">
+  <h2><span>6</span>«Tus estadísticas» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><h3 style="font-size:18px">Tus estadísticas</h3></div>
+      <div class="seg"><div class="on">7 días</div><div>30 días</div><div>Siempre</div></div>
+      <div class="nums">
+        <div class="num"><b>6 h 20 min</b><small>escuchado</small></div>
+        <div class="num"><b>92</b><small>canciones</small></div>
+        <div class="num"><b>41</b><small>artistas</small></div>
+      </div>
+      <div class="why" style="margin-top:6px">El tiempo se mide desde el 17 nov; las escuchas, desde que hay historial.</div>
+      <div class="sec">Canciones más escuchadas</div>
+      <div class="row" style="padding:4px 0"><span class="n">1</span><div class="cv c4" style="width:34px;height:34px"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><span class="cnt">14</span></div>
+      <div class="row" style="padding:4px 0"><span class="n">2</span><div class="cv c6" style="width:34px;height:34px"></div><div class="t"><b>Amen, Sister (2 a.m. edit)</b><small>Kettle Drift</small></div><span class="cnt">11</span></div>
+      <div class="row" style="padding:4px 0"><span class="n">3</span><div class="cv c2" style="width:34px;height:34px"></div><div class="t"><b>Static Lullaby</b><small>Nine Volt Choir</small></div><span class="cnt">9</span></div>
+      <div class="sec">Artistas más escuchados</div>
+      <div class="row" style="padding:4px 0"><span class="n">1</span><div class="cv c4 av"></div><div class="t"><b>Halcyon Drift</b><small>5 canciones distintas</small></div><span class="cnt">31</span></div>
+      <div class="row" style="padding:4px 0"><span class="n">2</span><div class="cv c6 av"></div><div class="t"><b>Kettle Drift</b><small>4 canciones distintas</small></div><span class="cnt">22</span></div>
+      <div class="row" style="padding:4px 0"><span class="n">3</span><div class="cv c5 av"></div><div class="t"><b>Sora Kite</b><small>6 canciones distintas</small></div><span class="cnt">19</span></div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Arriba se elige el periodo. Tres cifras: tiempo escuchado, canciones distintas y artistas distintos. Debajo, <b>las 10 canciones y los 10 artistas</b> que más han sonado, con cuántas veces (bajando se ven todos). Tocar una canción la reproduce. Tocar un artista lo busca en Buscar: su propia página es la idea 4, que va aparte.</p>
+</section>
+
+</div>
+
+<h2 class="part">Panel web en el PC</h2>
+
+<!-- 7 INICIO WEB -->
+<section class="shot">
+  <h2><span>7</span>Inicio <i class="tag">CAMBIA</i></h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><b></b>MyMusic</div>
+        <div class="nav on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div>
+        <div class="nav"><svg class="ic"><use href="#i-search"/></svg>Buscar</div>
+        <h4>Tus listas <a>+</a></h4>
+        <div class="pl">likes<small>487</small></div>
+        <div class="pl">breakcore<small>212</small></div>
+        <div class="pl">para currar<small>86</small></div>
+        <div class="pl">coche<small>140</small></div>
+        <div class="pl">city pop<small>54</small></div>
+        <div class="who"><b>I</b>iker · Ajustes</div>
+      </aside>
+      <main class="main">
+        <h3>Inicio</h3>
+        <div class="banner">
+          <div class="cv" style="width:44px;height:44px"></div>
+          <div style="flex:1"><b>Continuar: breakcore</b><div class="mut">Canción 14 de 212 · 1:32 · estaba sonando en tu Pocophone</div></div>
+          <div class="btn pri"><svg class="ic f" style="width:14px;height:14px"><use href="#i-play"/></svg>Continuar aquí</div>
+        </div>
+        <div class="banner plain">
+          <div class="radtile"><svg class="ic"><use href="#i-radio"/></svg></div>
+          <div style="flex:1"><b>Tu radio</b><div class="mut">Canciones parecidas a lo que escuchas, sin repetir las tuyas</div></div>
+          <div class="btn"><svg class="ic f" style="width:14px;height:14px"><use href="#i-play"/></svg>Escuchar</div>
+        </div>
+        <div class="ring" style="margin-top:4px;padding:0 2px 2px">
+          <div class="sec">Para ti</div>
+          <div class="cards">
+            <div class="wcard"><div class="cv au au1"><svg class="ic"><use href="#i-trend"/></svg></div><b>Lo más escuchado</b><small>38 canciones · últimos 30 días</small></div>
+            <div class="wcard"><div class="cv au au2"><svg class="ic"><use href="#i-clock"/></svg></div><b>Hace tiempo que no suena</b><small>50 canciones · cambia cada día</small></div>
+            <div class="wcard"><div class="cv au au3"><svg class="ic"><use href="#i-radio"/></svg></div><b>Descubierto en la radio</b><small>17 canciones · 9 sin guardar</small></div>
+            <div class="wcard st"><div><small style="display:flex;align-items:center;gap:6px;color:var(--acc);font-weight:650"><svg class="ic" style="width:16px;height:16px"><use href="#i-chart"/></svg>Tus estadísticas</small><div class="big">6 h 20 min</div><small>92 canciones · 41 artistas</small></div><small>Últimos 7 días · Ver más ›</small></div>
+          </div>
+        </div>
+        <div class="sec">Tus listas</div>
+        <div class="cards">
+          <div class="wcard" style="padding:10px"><b>likes</b><small>487 canciones</small></div>
+          <div class="wcard" style="padding:10px"><b>breakcore</b><small>212 canciones</small></div>
+          <div class="wcard" style="padding:10px"><b>para currar</b><small>86 canciones</small></div>
+          <div class="wcard" style="padding:10px"><b>coche</b><small>140 canciones</small></div>
+        </div>
+      </main>
+      <footer class="player">
+        <div class="now"><div class="cv c4"></div><div style="min-width:0"><b class="mut">Nada sonando</b><small>Elige una lista o busca una canción</small></div></div>
+        <div class="ctl"><div class="bts"><svg class="ic"><use href="#i-shuffle"/></svg><svg class="ic f"><use href="#i-prev"/></svg><div class="big"><svg class="ic f"><use href="#i-play"/></svg></div><svg class="ic f"><use href="#i-next"/></svg><svg class="ic"><use href="#i-repeat"/></svg></div><div class="prog"><span>0:00</span><div class="tr"></div><span>0:00</span></div></div>
+        <div class="right"><svg class="ic"><use href="#i-queue"/></svg><svg class="ic"><use href="#i-vol"/></svg><div class="vol"><i></i></div></div>
+      </footer>
+    </div>
+  </div>
+  <p class="cap">«Para ti» entra entre «Tu radio» y «Tus listas»: <b>cuatro tarjetas</b> en la misma rejilla que las listas, las tres automáticas y la de las estadísticas. Debajo sigue todo igual, con «Escuchado hace poco» al final (aquí no cabe en el dibujo). Las listas automáticas <b>no</b> salen en la barra lateral: ahí siguen solo las tuyas.</p>
+</section>
+
+<!-- 8 ESTADÍSTICAS WEB -->
+<section class="shot">
+  <h2><span>8</span>«Tus estadísticas» <i class="tag">NUEVA</i></h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><b></b>MyMusic</div>
+        <div class="nav"><svg class="ic"><use href="#i-home"/></svg>Inicio</div>
+        <div class="nav"><svg class="ic"><use href="#i-search"/></svg>Buscar</div>
+        <h4>Tus listas <a>+</a></h4>
+        <div class="pl">likes<small>487</small></div>
+        <div class="pl">breakcore<small>212</small></div>
+        <div class="pl">para currar<small>86</small></div>
+        <div class="pl">coche<small>140</small></div>
+        <div class="pl">city pop<small>54</small></div>
+        <div class="who"><b>I</b>iker · Ajustes</div>
+      </aside>
+      <main class="main">
+        <div style="display:flex;align-items:center;gap:10px"><svg class="ic mut"><use href="#i-back"/></svg><h3>Tus estadísticas</h3></div>
+        <div class="seg" style="margin-top:14px"><div class="on">7 días</div><div>30 días</div><div>Siempre</div></div>
+        <div class="nums">
+          <div class="num"><b>6 h 20 min</b><small>escuchado</small></div>
+          <div class="num"><b>92</b><small>canciones distintas</small></div>
+          <div class="num"><b>41</b><small>artistas distintos</small></div>
+        </div>
+        <div class="mut" style="font-size:11.5px;margin-top:8px">El tiempo se mide desde el 17 nov; las escuchas, desde que hay historial.</div>
+        <div class="two">
+          <div>
+            <div class="sec">Canciones más escuchadas</div>
+            <table>
+              <tr><td class="n">1</td><td><div class="t"><div class="cv c4"></div>Glass Engine</div></td><td class="mut">Halcyon Drift</td><td class="r">14</td></tr>
+              <tr><td class="n">2</td><td><div class="t"><div class="cv c6"></div>Amen, Sister (2 a.m. edit)</div></td><td class="mut">Kettle Drift</td><td class="r">11</td></tr>
+              <tr><td class="n">3</td><td><div class="t"><div class="cv c2"></div>Static Lullaby</div></td><td class="mut">Nine Volt Choir</td><td class="r">9</td></tr>
+              <tr><td class="n">4</td><td><div class="t"><div class="cv c5"></div>Pixel Rain</div></td><td class="mut">Sora Kite</td><td class="r">7</td></tr>
+              <tr><td class="n">5</td><td><div class="t"><div class="cv c7"></div>Night Bus to Nowhere</div></td><td class="mut">Lowlight Club</td><td class="r">6</td></tr>
+              <tr><td class="n">6</td><td><div class="t"><div class="cv c3"></div>Soft Reset</div></td><td class="mut">Mira Vantablack</td><td class="r">6</td></tr>
+            </table>
+          </div>
+          <div>
+            <div class="sec">Artistas más escuchados</div>
+            <table>
+              <tr><td class="n">1</td><td><div class="t"><div class="cv c4 av"></div>Halcyon Drift</div></td><td class="mut">5 canciones</td><td class="r">31</td></tr>
+              <tr><td class="n">2</td><td><div class="t"><div class="cv c6 av"></div>Kettle Drift</div></td><td class="mut">4 canciones</td><td class="r">22</td></tr>
+              <tr><td class="n">3</td><td><div class="t"><div class="cv c5 av"></div>Sora Kite</div></td><td class="mut">6 canciones</td><td class="r">19</td></tr>
+              <tr><td class="n">4</td><td><div class="t"><div class="cv c7 av"></div>Lowlight Club</div></td><td class="mut">3 canciones</td><td class="r">12</td></tr>
+              <tr><td class="n">5</td><td><div class="t"><div class="cv c3 av"></div>Mira Vantablack</div></td><td class="mut">2 canciones</td><td class="r">9</td></tr>
+              <tr><td class="n">6</td><td><div class="t"><div class="cv c2 av"></div>Nine Volt Choir</div></td><td class="mut">1 canción</td><td class="r">9</td></tr>
+            </table>
+          </div>
+        </div>
+      </main>
+      <footer class="player">
+        <div class="now"><div class="cv c4"></div><div style="min-width:0"><b class="mut">Nada sonando</b><small>Elige una lista o busca una canción</small></div></div>
+        <div class="ctl"><div class="bts"><svg class="ic"><use href="#i-shuffle"/></svg><svg class="ic f"><use href="#i-prev"/></svg><div class="big"><svg class="ic f"><use href="#i-play"/></svg></div><svg class="ic f"><use href="#i-next"/></svg><svg class="ic"><use href="#i-repeat"/></svg></div><div class="prog"><span>0:00</span><div class="tr"></div><span>0:00</span></div></div>
+        <div class="right"><svg class="ic"><use href="#i-queue"/></svg><svg class="ic"><use href="#i-vol"/></svg><div class="vol"><i></i></div></div>
+      </footer>
+    </div>
+  </div>
+  <p class="cap">Lo mismo que en el móvil, con las canciones y los artistas <b>lado a lado</b>. Se llega desde la tarjeta de Inicio. Doble clic en una canción la reproduce, como en las demás tablas del panel.</p>
+</section>
+
+</body>
+</html>

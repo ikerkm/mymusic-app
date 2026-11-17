@@ -6,6 +6,9 @@
 //   (la contraseña se lee de la variable MYMUSIC_CHECK_PASSWORD)
 //   Con MYMUSIC_CHECK_ADMIN y MYMUSIC_CHECK_ADMIN_PASSWORD (la cuenta del dueño) prueba además la
 //   pantalla «Consumo», que solo ve él. <usuario> conviene que NO sea el dueño: así se comprueba que no la ve.
+//   «Para ti» (listas automáticas y «Tus estadísticas», sección 11) se prueba con la cuenta del dueño si
+//   se da, y si no con <usuario>: hace falta historial. Con dos cuentas distintas se comprueba además que
+//   cada una ve solo lo suyo.
 //
 // No usa dependencias: habla con el navegador por su protocolo de depuración.
 
@@ -104,12 +107,25 @@ async function shot(name) {
     const { data } = await send('Page.captureScreenshot', { format: 'png' });
     writeFileSync(join(shots, `${name}.png`), Buffer.from(data, 'base64'));
 }
-/** El <audio> del panel no está en la página: se observa envolviendo sus métodos antes de cargar. */
+/**
+ * El <audio> del panel no está en la página: se observa envolviendo sus métodos antes de cargar.
+ * También se envuelve fetch: con window.__fetchHook = { path, edit(datos) } la prueba puede cambiar
+ * una respuesta del servidor (p. ej. simular una lista automática vacía) sin tocar los datos.
+ */
 const SPY = `(() => {
     const original = window.Audio;
     window.__audios = [];
     window.Audio = function (...args) { const a = new original(...args); window.__audios.push(a); return a; };
     window.Audio.prototype = original.prototype;
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+        const response = await realFetch(input, init);
+        const hook = window.__fetchHook;
+        const url = typeof input === 'string' ? input : input?.url ?? '';
+        if (!hook || !url.endsWith(hook.path) || !response.ok) return response;
+        const data = hook.edit(await response.clone().json());
+        return new Response(JSON.stringify(data), { status: response.status, headers: { 'Content-Type': 'application/json' } });
+    };
 })()`;
 const A = 'window.__audios[0]';
 const text = sel => `(document.querySelector(${JSON.stringify(sel)})?.textContent ?? '')`;
@@ -638,7 +654,7 @@ try {
         const names = await until(`document.querySelectorAll('.modal .usetable tbody tr').length >= 2 && [...document.querySelectorAll('.modal .usetable tbody tr td:first-child')].map(e => e.textContent).join('|')`, 8000);
         check(`${C}la tabla trae cada usuario y el total`, String(names).includes(user) && String(names).includes(admin) && String(names).endsWith('Total'), String(names));
         const heard = await js(`(() => { const row = [...document.querySelectorAll('.modal .usetable tbody tr')].find(r => r.cells[0].textContent === ${JSON.stringify(user)}); return row ? [...row.cells].map(c => c.textContent).join(' | ') : ''; })()`);
-        check(`${C}lo que ha gastado «${user}» en esta misma prueba está apuntado`, / [1-9]\d* (s|min)/.test(heard) && !/\| 0 MB \| 0 \|/.test(heard), heard);
+        check(`${C}lo que ha gastado «${user}» en esta misma prueba está apuntado`, / [1-9]\d* (s|min|h)/.test(heard) && !/\| 0 MB \| 0 \|/.test(heard), heard);
         check(`${C}dice cuántos caben y con qué límite`, await until(`/Con lo medido cabe(n unos)? \\d+ oyentes? a la vez/.test(${text('.modal .usage')})`, 5000), await js(`document.querySelector('.modal .note.big')?.textContent ?? ''`));
         check(`${C}cabe en el diálogo`, await js(fitsModal));
         await shot('c1_consumo');
@@ -652,6 +668,313 @@ try {
         check(`${C}en pantalla estrecha sale en tarjetas y cabe`, Boolean(await openUsage()) && Boolean(await until(`document.querySelectorAll('.modal .usecard').length >= 2 && !document.querySelector('.modal .usetable')`, 8000)) && await js(`${fitsModal} && ${fits}`));
         await shot('c2_consumo_movil');
         await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
+        await tap(q('.main .top .ib'));
+        await until(`!!document.querySelector('.modal')`);
+        await js(clickText('.modal .btn', 'Cerrar sesión'));
+        await until(`!!document.querySelector('.login input[name=username]')`, 8000);
+    }
+
+    // 11. «Para ti»: listas automáticas y «Tus estadísticas» (mockups/estadisticas-v1.html, pantallas 1-8)
+    {
+        const P = 'para ti: ';
+        const [rich, richPassword] = admin && adminPassword ? [admin, adminPassword] : [user, password];
+        const songsTxt = n => (n === 1 ? '1 canción' : `${n} canciones`);
+        const artistsTxt = n => (n === 1 ? '1 artista' : `${n} artistas`);
+        const listened = ms => {
+            const seconds = Math.floor((ms ?? 0) / 1000);
+            if (seconds <= 0) return '0 min';
+            if (seconds < 60) return `${seconds} s`;
+            const minutes = Math.floor(seconds / 60);
+            return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+        };
+        const apiGet = path => js(`fetch(${JSON.stringify(`/api${path}`)}, { credentials: 'same-origin' }).then(r => r.json())`);
+        // «d mmm» con los meses de tres letras del servidor (stats.js), en la hora local del navegador
+        const MONTHS = `['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']`;
+        const dayLabel = ymd => js(`(() => { const [y, m, d] = ${JSON.stringify(String(ymd ?? ''))}.split('-').map(Number); return y ? d + ' ' + ${MONTHS}[m - 1] : ''; })()`);
+        const shortDay = iso => js(`(() => { const d = new Date(${JSON.stringify(iso)}); return d.getDate() + ' ' + ${MONTHS}[d.getMonth()]; })()`);
+        const loginAs = async (name, pass) => {
+            await send('Page.navigate', { url: `${base}/` });
+            await until(`!!document.querySelector('.login input[name=username]')`);
+            await js(typeInto('.login input[name=username]', name));
+            await js(typeInto('.login input[name=password]', pass));
+            await js(`document.querySelector('.login form').requestSubmit()`);
+            return until(`${text('.main h3')} === 'Inicio' && !!document.querySelector('.main > .parati')`, 10000);
+        };
+        // «Para ti» va entre «Tu radio» y «Tus listas»
+        const between = `(() => {
+            const kids = [...document.querySelector('.main').children];
+            const radio = document.querySelector('.main > .banner.radio');
+            const para = document.querySelector('.main > .parati');
+            const lists = kids.find(e => e.classList.contains('sec') && e.textContent.startsWith('Tus listas'));
+            return !!radio && !!para && !!lists && kids.indexOf(radio) < kids.indexOf(para) && kids.indexOf(para) < kids.indexOf(lists);
+        })()`;
+        const pause = async () => { await js(`${A}.pause()`); await until(`${A}.paused`, 5000); };
+        const stamp = Date.now() % 100000;
+        const savedName = `zz guardada web ${stamp}`;
+        const savedNameM = `zz guardada movil ${stamp}`;
+
+        // --- Escritorio (pantallas 7 y 8, y la lista automática abierta como una lista)
+        await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+        check(`${P}entra «${rich}» y Inicio tiene «Para ti»`, Boolean(await loginAs(rich, richPassword)));
+        const auto = await apiGet('/auto');
+        const shownLists = auto.lists.filter(item => item.count > 0);
+        const autoNames = auto.lists.map(item => item.name);
+        const nameOf = kind => auto.lists.find(item => item.kind === kind)?.name;
+        await sleep(600);
+        const cardKinds = await js(`[...document.querySelectorAll('.parati .card[data-kind]')].map(e => e.dataset.kind).join(' ')`);
+        check(`${P}escritorio: entre «Tu radio» y «Tus listas», las listas automáticas con canciones y la tarjeta de las estadísticas`,
+            await js(between) && cardKinds === shownLists.map(item => item.kind).join(' ') && await js(`!!document.querySelector('.parati .card.st')`),
+            `${cardKinds} + estadísticas (${shownLists.length + 1} tarjetas)`);
+        const wantSubs = shownLists.map(item => `${songsTxt(item.count)} · ${{ top: 'últimos 30 días', forgotten: 'cambia cada día', radio: `${item.unsaved} sin guardar` }[item.kind]}`).join(' | ');
+        const subs = await js(`[...document.querySelectorAll('.parati .card[data-kind]')].map(e => e.querySelector('b').textContent + ': ' + e.querySelector('small').textContent).join(' | ')`);
+        check(`${P}escritorio: cada tarjeta dice su nombre y «N canciones · …»`, subs === shownLists.map((item, i) => `${item.name}: ${wantSubs.split(' | ')[i]}`).join(' | '), subs);
+        const statCard = await js(text('.parati .card.st'));
+        const week = auto.stats;
+        check(`${P}escritorio: la tarjeta de las estadísticas lleva el tiempo de 7 días en grande, canciones y artistas, y «Ver más»`,
+            await js(`${text('.parati .card.st .big')} === ${JSON.stringify(listened(week.listenedMs))}`) && statCard.includes(`${songsTxt(week.songs)} · ${artistsTxt(week.artists)}`) && statCard.includes('Últimos 7 días · Ver más ›'),
+            statCard);
+        check(`${P}las listas automáticas no salen en la barra lateral`, await js(`![...document.querySelectorAll('.side .pl')].some(e => ${JSON.stringify(autoNames)}.some(n => e.textContent.includes(n)))`));
+        await shot('s01_inicio_para_ti');
+
+        // Una lista automática sin canciones no sale (se simula que «Hace tiempo que no suena» viene vacía)
+        await js(`window.__fetchHook = { path: '/api/auto', edit: data => ({ ...data, lists: data.lists.map(l => (l.kind === 'forgotten' ? { ...l, count: 0 } : l)) }) }`);
+        await js(clickText('.side .nav', 'Buscar'));
+        await js(clickText('.side .nav', 'Inicio'));
+        const without = shownLists.filter(item => item.kind !== 'forgotten').map(item => item.kind).join(' ');
+        const hidden = await until(`!!document.querySelector('.parati .card.st') && [...document.querySelectorAll('.parati .card[data-kind]')].map(e => e.dataset.kind).join(' ') === ${JSON.stringify(without)}`, 8000);
+        await js('window.__fetchHook = null');
+        check(`${P}una lista automática sin canciones no sale en «Para ti» (simulado)`, Boolean(hidden), `quedan: ${without} + estadísticas`);
+        await js(clickText('.side .nav', 'Buscar'));
+        await js(clickText('.side .nav', 'Inicio'));
+        await until(`[...document.querySelectorAll('.parati .card[data-kind]')].length === ${shownLists.length}`, 8000);
+
+        // «Tus estadísticas» (pantalla 8): los tres periodos, canciones y artistas lado a lado
+        await js(`document.querySelector('.parati .card.st').click()`);
+        let firstArtist = null;
+        for (const [label, period] of [['7 días', '7'], ['30 días', '30'], ['Siempre', 'all']]) {
+            if (period !== '7') await js(clickText('.pseg button', label));
+            const want = await apiGet(`/stats?period=${period}`);
+            const nums = await until(`${text('.main h3')} === 'Tus estadísticas' && !!document.querySelector('.stats[data-period="${period}"]:not(.busy)') && ${text('.pseg button.on')} === ${JSON.stringify(label)} && [...document.querySelectorAll('.stats .num')].map(e => e.textContent).join(' | ')`, 10000);
+            const wantNums = `${listened(want.listenedMs)}escuchado | ${want.songs}canciones distintas | ${want.artists}artistas distintos`;
+            check(`${P}estadísticas (escritorio), «${label}»: tiempo escuchado, canciones y artistas distintos como dice el servidor`, nums === wantNums, `${nums} — ${want.plays} escuchas`);
+            const since = await js(text('.stats .since'));
+            const sinceDay = await dayLabel(want.listenedSince);
+            const rows = await js(`[...document.querySelectorAll('.two > div')].map(part => [...part.querySelectorAll('tbody tr')].map(row => row.textContent))`);
+            const sideBySide = await js(`(() => { const [a, b] = document.querySelectorAll('.two > div'); const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect(); return Math.abs(ra.top - rb.top) < 2 && rb.left >= ra.right; })()`);
+            check(`${P}estadísticas (escritorio), «${label}»: «desde el ${sinceDay}», y las 10 canciones y los 10 artistas, lado a lado`,
+                since === `El tiempo se mide desde el ${sinceDay}; las escuchas, desde que hay historial.` && sideBySide
+                && rows[0].length === want.topTracks.length && rows[1].length === want.topArtists.length
+                && rows[0].every((row, i) => row.includes(want.topTracks[i].title) && row.endsWith(String(want.topTracks[i].plays)))
+                && rows[1].every((row, i) => row.includes(want.topArtists[i].name) && row.includes(songsTxt(want.topArtists[i].songs)) && row.endsWith(String(want.topArtists[i].plays))),
+                `${rows[0].length} canciones, ${rows[1].length} artistas; 1.º ${want.topTracks[0]?.title} (${want.topTracks[0]?.plays}) · ${want.topArtists[0]?.name} (${want.topArtists[0]?.plays})`);
+            await shot(`s02_estadisticas_${period}`);
+            firstArtist = want.topArtists[0]?.name ?? null;
+        }
+        // Doble clic en una canción la reproduce
+        const statKey = await js(`document.querySelector('table.stat tbody tr')?.dataset.key ?? null`);
+        await js(`document.querySelector('table.stat tbody tr').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+        check(`${P}estadísticas: doble clic en una canción la reproduce`, Boolean(await until(`!${A}.paused && ${A}.currentTime > 1 && document.querySelector('table.stat tbody tr.on')?.dataset.key === ${JSON.stringify(statKey)}`, 90000, 500)), String(statKey));
+        await pause();
+        // Tocar un artista abre Buscar con su nombre
+        await js(`document.querySelector('table.stat.arts tbody tr').click()`);
+        const searched = await until(`${text('.main h3')} === 'Buscar' && document.querySelector('.searchbox input').value === ${JSON.stringify(firstArtist)} && document.querySelectorAll('.main tbody tr').length`, 60000, 500);
+        check(`${P}estadísticas: tocar un artista abre Buscar con su nombre y busca`, Boolean(searched), `«${firstArtist}»: ${searched} resultados`);
+        await shot('s03_artista_en_buscar');
+
+        // Cada lista automática, abierta como una lista: sin menú de lista, sin «Importar» ni arrastre, con «Guardar como lista»
+        const details = {};
+        for (const item of shownLists) {
+            await js(clickText('.side .nav', 'Inicio'));
+            await until(`!!document.querySelector('.parati .card[data-kind=${item.kind}]')`, 8000);
+            await js(`document.querySelector('.parati .card[data-kind=${item.kind}]').click()`);
+            const { list } = await apiGet(`/auto/${item.kind}`);
+            details[item.kind] = list;
+            const opened = await until(`${text('.listhead h3')} === ${JSON.stringify(item.name)} && document.querySelectorAll('.main tbody tr').length === ${list.count}`, 10000);
+            const readOnly = await js(`!document.querySelector('.listhead .btn.icon') && ![...document.querySelectorAll('.main .btn')].some(b => b.textContent.includes('Importar'))
+                && [...document.querySelectorAll('.listhead .btn')].some(b => b.innerText.trim() === 'Guardar como lista') && document.querySelectorAll('.main tbody tr[draggable=true]').length === 0
+                && ${text('.listhead .kind')} === 'Lista automática' && ${text('.listhead .why')} === ${JSON.stringify(list.description)}`);
+            check(`${P}«${item.name}» (escritorio): se abre como una lista con su «por qué», sin menú de lista, sin «Importar» ni arrastre, con «Guardar como lista»`, Boolean(opened) && readOnly, `${list.count} canciones`);
+            const first = list.tracks[0];
+            const row = await js(`document.querySelector('.main tbody tr').textContent`);
+            let says;
+            if (item.kind === 'top') says = row.includes(`${first.plays} veces`);
+            else if (item.kind === 'forgotten') says = row.includes(first.list.name) && row.includes(first.lastPlayedAt ? await shortDay(first.lastPlayedAt) : 'sin escuchas');
+            else says = row.includes(first.via) && row.includes(first.savedIn ? `en ${first.savedIn.name}` : 'sin guardar') && await js(`document.querySelectorAll('.main tbody .pill.loose').length === ${list.unsaved}`);
+            check(`${P}«${item.name}» (escritorio): cada fila dice lo suyo`, says, row.replace(/\s+/g, ' ').slice(0, 140));
+            await shot(`s04_auto_${item.kind}`);
+        }
+
+        // Menú de una canción (mejor una de Spotify, que es la que tendría «Cambiar coincidencia»)
+        const menuKind = shownLists[0]?.kind;
+        if (menuKind) {
+            await js(clickText('.side .nav', 'Inicio'));
+            await until(`!!document.querySelector('.parati .card[data-kind=${menuKind}]')`, 8000);
+            await js(`document.querySelector('.parati .card[data-kind=${menuKind}]').click()`);
+            await until(`document.querySelectorAll('.main tbody tr').length === ${details[menuKind].count}`, 10000);
+            const spIndex = details[menuKind].tracks.findIndex(t => t.key.startsWith('sp:'));
+            await js(`document.querySelectorAll('.main tbody tr')[${Math.max(0, spIndex)}].querySelector('.ib').click()`);
+            await until(`!!document.querySelector('.menu')`);
+            const labels = await js(`[...document.querySelectorAll('.menu button')].map(b => b.textContent)`);
+            check(`${P}menú de una canción de una lista automática: las de siempre menos «Quitar de la lista» y «Cambiar coincidencia»`,
+                ['Reproducir', 'Reproducir a continuación', 'Añadir a la cola', 'Añadir a una lista…'].every(l => labels.includes(l)) && !labels.some(l => l.startsWith('Quitar de la lista') || l.startsWith('Cambiar coincidencia')),
+                `${labels.join(' | ')}${spIndex >= 0 ? ' (canción de Spotify)' : ' (no hay canciones de Spotify)'}`);
+            await shot('s05_menu_cancion');
+            await js(clickText('.menu button', 'Añadir a una lista'));
+            await until(`!!document.querySelector('.modal .pick')`);
+            const picks = await js(`[...document.querySelectorAll('.modal .pick b')].map(b => b.textContent)`);
+            check(`${P}«Añadir a una lista…» no ofrece las listas automáticas`, picks.length > 1 && !picks.some(p => autoNames.includes(p)), picks.join(' | '));
+            await js(clickText('.modal .btn', 'Cancelar'));
+
+            // Reproducir: «Sonando de …» dice su nombre y la sesión lleva origen «auto»
+            const name = nameOf(menuKind);
+            await js(clickText('.listhead .btn', 'Reproducir'));
+            const sub = await until(`!${A}.paused && ${A}.currentTime > 1 && ${text('.player .now small')}.includes(${JSON.stringify(`de ${name}`)}) && ${text('.player .now small')}`, 90000, 500);
+            const source = await js(`fetch('/api/session', { credentials: 'same-origin' }).then(r => r.json()).then(r => r.session?.source ?? null)`);
+            check(`${P}reproducir «${name}»: suena, la barra dice «de ${name}» y la sesión lleva origen «auto»`, Boolean(sub) && source?.type === 'auto' && source?.id === menuKind && source?.name === name, `${sub} · ${JSON.stringify(source)}`);
+            await shot('s06_auto_sonando');
+            await pause();       // que la prueba no sume escuchas de más al historial
+
+            // «Guardar como lista»: una lista normal con lo de ahora, que sale en la barra lateral y se abre
+            await js(`document.querySelector('.listhead .btn.save').click()`);
+            await until(`!!document.querySelector('.modal input')`);
+            const offered = await js(`document.querySelector('.modal input').value`);
+            check(`${P}«Guardar como lista»: el diálogo trae el nombre con la fecha`, offered === details[menuKind].saveName, offered);
+            await shot('s07_guardar_como_lista');
+            await js(typeInto('.modal input', savedName));
+            await js(clickText('.modal .btn.pri', 'Guardar'));
+            const saved = await until(`${text('.listhead h3')} === ${JSON.stringify(savedName)} && ${text('.listhead .kind')} === 'Lista' && document.querySelectorAll('.main tbody tr').length === ${details[menuKind].count}
+                && [...document.querySelectorAll('.side .pl')].some(e => e.textContent.startsWith(${JSON.stringify(savedName)}))`, 10000);
+            check(`${P}«Guardar como lista» crea una lista normal con esas canciones, que sale en la barra lateral y se abre`, Boolean(saved), savedName);
+            check(`${P}la lista guardada es una lista normal (con «Importar», su menú y arrastre)`,
+                await js(`[...document.querySelectorAll('.listhead .btn')].some(b => b.textContent.includes('Importar')) && !!document.querySelector('.listhead .btn.icon') && document.querySelectorAll('.main tbody tr[draggable=true]').length > 0`));
+            await shot('s08_lista_guardada');
+            const after = await apiGet('/auto');
+            check(`${P}la automática sigue en «Para ti» como estaba`, after.lists.find(l => l.kind === menuKind)?.count === details[menuKind].count);
+
+            // Cada cuenta ve lo suyo (solo con dos cuentas distintas)
+            if (rich !== user && other.token) {
+                const theirs = (await asOther('GET', '/api/lists')).body.lists ?? [];
+                const ids = new Set(theirs.map(l => l.id));
+                const mine = new Set(((await apiGet('/lists')).lists ?? []).map(l => l.id));
+                const theirForgotten = (await asOther('GET', '/api/auto/forgotten')).body.list?.tracks ?? [];
+                const theirRadio = (await asOther('GET', '/api/auto/radio')).body.list?.tracks ?? [];
+                const refs = [...theirForgotten.map(t => t.list?.id), ...theirRadio.map(t => t.savedIn?.id)].filter(Boolean);
+                check(`${P}cada cuenta ve lo suyo: «${user}» no ve la lista guardada y sus listas automáticas solo apuntan a listas suyas`,
+                    !theirs.some(l => l.name === savedName) && refs.every(id => ids.has(id) && !mine.has(id)), `${refs.length} referencias a listas de «${user}»`);
+            } else {
+                console.log(`INFO  ${P}«cada cuenta ve lo suyo» no se comprueba: hace falta una segunda cuenta distinta (MYMUSIC_CHECK_ADMIN ≠ <usuario>)`);
+            }
+
+            // Limpieza: la lista guardada, a la papelera
+            await js(`document.querySelector('.listhead .btn.icon').click()`);
+            await until(`!!document.querySelector('.menu')`);
+            await js(clickText('.menu button', 'Enviar a la papelera'));
+            await until(`!!document.querySelector('.modal')`);
+            await js(clickText('.modal .btn.pri', 'Enviar a la papelera'));
+            check(`${P}la lista guardada de la prueba va a la papelera`, await until(`![...document.querySelectorAll('.side .pl')].some(e => e.textContent.includes(${JSON.stringify(savedName)}))`, 10000));
+        }
+        await js(`fetch('/api/logout', { method: 'POST', credentials: 'same-origin', headers: { 'X-MyMusic': 'web' } })`);
+
+        // --- Pantalla estrecha (pantallas 1-6, como en la app)
+        const PM = `${P}móvil: `;
+        await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+        check(`${PM}entra y Inicio tiene «Para ti»`, Boolean(await loginAs(rich, richPassword)));
+        if (menuKind) check(`${PM}«Continuar» dice el nombre de la lista automática que sonaba`, Boolean(await until(`${text('.main .banner')}.includes(${JSON.stringify(`Continuar: ${nameOf(menuKind)}`)})`, 8000)), await js(text('.main .banner b')));
+        await sleep(600);
+        const tiles = await js(`[...document.querySelectorAll('.parati .hs .ac')].map(e => e.dataset.kind + ': ' + e.querySelector('b').textContent + ' · ' + e.querySelector('small').textContent).join(' | ')`);
+        const statLine = await js(text('.parati .statcard .tx div'));
+        const autoM = await apiGet('/auto');
+        const shownM = autoM.lists.filter(item => item.count > 0);
+        check(`${PM}«Para ti» entre «Tu radio» y «Tus listas»: las listas en fila y la tarjeta «Tus estadísticas» debajo, y cabe`,
+            await js(between) && tiles === shownM.map(item => `${item.kind}: ${item.name} · ${songsTxt(item.count)}`).join(' | ') && await js(`!!document.querySelector('.parati .hs + .statcard') && ${fits}`), tiles);
+        check(`${PM}la tarjeta dice «7 días: <tiempo> · <N> canciones»`, statLine === `7 días: ${listened(autoM.stats.listenedMs)} · ${songsTxt(autoM.stats.songs)}`, statLine);
+        await shot('sm01_inicio_para_ti');
+
+        for (const item of shownM) {
+            await tap(`document.querySelector('.parati .ac[data-kind=${item.kind}]')`);
+            const { list } = await apiGet(`/auto/${item.kind}`);
+            const opened = await until(`${text('.listhead h3')} === ${JSON.stringify(item.name)} && document.querySelectorAll('.main .row[data-key]').length === ${list.count}`, 10000);
+            const shape = await js(`[...document.querySelectorAll('.listhead .btn')].some(b => b.innerText.trim() === 'Guardar') && ![...document.querySelectorAll('.main .btn')].some(b => b.textContent.includes('Importar'))
+                && !document.querySelector('.main .top .ib[title="Más"]') && ${text('.listhead .info > .mut')}.startsWith('Automática · ') && ${fits}`);
+            check(`${PM}«${item.name}»: se abre con volver, «Automática · N canciones», sin menú arriba ni «Importar», con «Guardar», y cabe`, Boolean(opened) && shape, `${list.count} canciones`);
+            const first = list.tracks[0];
+            const row = await js(`document.querySelector('.main .row[data-key]').innerText.replace(/\\s+/g, ' ')`);
+            let says;
+            if (item.kind === 'top') says = await js(`!!document.querySelector('.main .row[data-key] .n') && ${text('.main .row[data-key] .cnt')} === ${JSON.stringify(`${first.plays} veces`)}`);
+            else if (item.kind === 'forgotten') says = row.includes(`en ${first.list.name} · ${first.lastPlayedAt ? `última vez ${await shortDay(first.lastPlayedAt)}` : 'sin escuchas'}`);
+            else says = row.includes(first.via) && await js(`${text('.main .row[data-key] .pill')} === ${JSON.stringify(first.savedIn ? `en ${first.savedIn.name}` : 'sin guardar')}`);
+            check(`${PM}«${item.name}»: cada fila dice lo suyo`, says, row.slice(0, 140));
+            await shot(`sm02_auto_${item.kind}`);
+            if (item === shownM[0]) {
+                // Hoja de la canción: sin «Quitar de la lista» ni «Cambiar coincidencia»
+                const spIndex = list.tracks.findIndex(t => t.key.startsWith('sp:'));
+                await tap(`document.querySelectorAll('.main .row[data-key]')[${Math.max(0, spIndex)}].querySelector('.ib')`);
+                await until(`!!document.querySelector('.sheet .opt')`);
+                const labels = await js(`[...document.querySelectorAll('.sheet .opt')].map(b => b.textContent)`);
+                check(`${PM}la hoja de una canción no ofrece «Quitar de la lista» ni «Cambiar coincidencia»`,
+                    labels.includes('Añadir a una lista…') && !labels.some(l => l.startsWith('Quitar de la lista') || l.startsWith('Cambiar coincidencia')), labels.join(' | '));
+                await shot('sm03_hoja_cancion');
+                await tapAt(195, 120);
+                await sleep(600);
+                // Tocar una fila la reproduce: el reproductor dice «Sonando de <nombre>»
+                await tap(`document.querySelectorAll('.main .row[data-key]')[0].querySelector('.t')`);
+                await until(`!${A}.paused && ${A}.currentTime > 1`, 90000, 500);
+                await tap(q('.mini .t'));
+                const from = await until(`!!${shown('.full')} && ${text('.full .mid')}`, 5000);
+                check(`${PM}tocar una fila la reproduce y el reproductor dice «Sonando de ${item.name}»`, String(from).replace(/\s+/g, ' ').trim() === `Sonando de${item.name}` || String(from).includes(`Sonando de${item.name}`), String(from));
+                await shot('sm04_sonando_de');
+                await pause();
+                await js('history.back()');
+                await until(`!${shown('.full')}`, 5000);
+                // «Guardar» (pantalla 5): hoja con el nombre puesto; al guardar, la lista sale en Listas y se abre
+                await tap(q('.listhead .btn.save'));
+                await until(`!!document.querySelector('.modal input')`);
+                const offered = await js(`document.querySelector('.modal input').value`);
+                check(`${PM}«Guardar» abre la hoja «Guardar como lista» con el nombre puesto, Cancelar y Guardar`,
+                    offered === list.saveName && await js(`${text('.modal h2')} === 'Guardar como lista' && document.querySelectorAll('.modal .acts.split .btn').length === 2`), offered);
+                await shot('sm05_guardar');
+                await js(typeInto('.modal input', savedNameM));
+                await js(clickText('.modal .btn.pri', 'Guardar'));
+                check(`${PM}al guardar, la lista nueva se abre`, Boolean(await until(`${text('.listhead h3')} === ${JSON.stringify(savedNameM)} && document.querySelectorAll('.main .row[data-key]').length === ${list.count}`, 10000)));
+                await tap(byText('.side .nav', 'Listas'));
+                check(`${PM}y sale en Listas, donde no están las automáticas`, Boolean(await until(`${text('.main h3')} === 'Listas' && !!${byText('.main .row', savedNameM)} && ![...document.querySelectorAll('.main .row')].some(e => ${JSON.stringify(autoNames)}.some(n => e.textContent.includes(n)))`, 8000)));
+                await shot('sm06_listas');
+                await tap(`${byText('.main .row', savedNameM)}.querySelector('.ib')`);
+                await until(`!!document.querySelector('.sheet .opt')`);
+                await tap(byText('.sheet .opt', 'Enviar a la papelera'));
+                await until(`!!document.querySelector('.modal .btn.pri')`);
+                await js(clickText('.modal .btn.pri', 'Enviar a la papelera'));
+                check(`${PM}la lista guardada de la prueba va a la papelera`, await until(`!${byText('.main .row', savedNameM)}`, 10000));
+                await tap(byText('.side .nav', 'Inicio'));
+                await until(`!!document.querySelector('.main > .parati')`, 8000);
+                continue;
+            }
+            await tap(q('.main .top .ib'));
+            check(`${PM}volver lleva a Inicio`, Boolean(await until(`${text('.main h3')} === 'Inicio' && !!document.querySelector('.main > .parati')`, 8000)));
+        }
+
+        // «Tus estadísticas» (pantalla 6)
+        await tap(q('.parati .statcard'));
+        for (const [label, period] of [['7 días', '7'], ['30 días', '30'], ['Siempre', 'all']]) {
+            if (period !== '7') await tap(byText('.pseg button', label));
+            const want = await apiGet(`/stats?period=${period}`);
+            const nums = await until(`!!document.querySelector('.stats[data-period="${period}"]:not(.busy)') && ${text('.pseg button.on')} === ${JSON.stringify(label)} && [...document.querySelectorAll('.stats .num')].map(e => e.textContent).join(' | ')`, 10000);
+            const rows = await js(`[...document.querySelectorAll('.two > div')].map(part => part.querySelectorAll('.row').length)`);
+            check(`${PM}estadísticas «${label}»: las tres cifras, canciones y artistas debajo, y cabe`,
+                nums === `${listened(want.listenedMs)}escuchado | ${want.songs}canciones | ${want.artists}artistas` && rows[0] === want.topTracks.length && rows[1] === want.topArtists.length && await js(fits),
+                `${nums} · ${rows.join(' + ')} filas`);
+            await shot(`sm07_estadisticas_${period}`);
+        }
+        await js(`document.querySelector('.main').scrollTop = 99999`);
+        await sleep(300);
+        await shot('sm08_estadisticas_artistas');
+        const artistName = await js(`document.querySelector('.row.art .t b').textContent`);
+        await tap(`document.querySelector('.row.art .t')`);
+        check(`${PM}tocar un artista abre Buscar con su nombre`, Boolean(await until(`${text('.main h3')} === 'Buscar' && document.querySelector('.searchbox input').value === ${JSON.stringify(artistName)}`, 8000)), artistName);
+        await tap(byText('.side .nav', 'Inicio'));
+        await until(`${text('.main h3')} === 'Inicio'`);
         await tap(q('.main .top .ib'));
         await until(`!!document.querySelector('.modal')`);
         await js(clickText('.modal .btn', 'Cerrar sesión'));
