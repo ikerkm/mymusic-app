@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { Radio, RadioMemory, SongSet, songSig } from '../src/radio.js';
+import { ARTIST_BLOCK_MS, Radio, RadioMemory, SKIP_SONG_MS, SongSet, songSig } from '../src/radio.js';
 import { SessionStore } from '../src/session.js';
 import { startServer, tempDataDir } from './helpers.js';
 
@@ -402,6 +402,154 @@ test('API: la radio de un usuario no toca la del otro', async () => {
         await s.call('POST', '/api/session', { track: seedTrack(1) }, other);
         await sleep(60);
         assert.equal((await s.call('GET', '/api/session', undefined, other)).body.session.count, 1);
+    } finally {
+        await s.close();
+    }
+});
+
+// ------------------------------------------------------------------ aprende de lo que se salta (17-11)
+
+const DAY = 24 * 60 * 60 * 1000;
+
+test('radio aprende: una canción saltada no vuelve a esa radio en 15 días, y solo en esa', () => {
+    let now = Date.parse('2026-11-17T12:00:00Z');
+    const dir = tempDataDir();
+    const memory = new RadioMemory(dir, { now: () => now });
+    const song = { key: yt('sk', 1), platform: 'youtube', title: 'Grupo X - Tema 1 (Official Video)', artist: 'Grupo X' };
+    assert.deepEqual(memory.skip('list:a', song), { skips: 1, blocked: null });
+    assert.ok(memory.avoid('list:a').songs.has(song));
+    assert.ok(memory.avoid('list:a').songs.has({ key: yt('sk', 2), title: 'Grupo X - Tema 1 (Lyrics)', artist: 'Letras' }), 'también en otro vídeo');
+    assert.ok(!memory.avoid('list:b').songs.has(song), 'otra radio no se entera');
+    assert.ok(!memory.avoid('home').songs.has(song));
+    assert.ok(new RadioMemory(dir, { now: () => now }).avoid('list:a').songs.has(song), 'queda en disco');
+    now += SKIP_SONG_MS - 1000;
+    assert.ok(memory.avoid('list:a').songs.has(song), 'a los 14 días y pico sigue fuera');
+    now += 2000;
+    assert.ok(!memory.avoid('list:a').songs.has(song), 'a los 15 días puede volver');
+});
+
+test('radio aprende: 5 saltos de un artista en 30 días lo dejan fuera de esa radio 30 días; después empieza de cero', () => {
+    let now = Date.parse('2026-11-17T12:00:00Z');
+    const memory = new RadioMemory(tempDataDir(), { now: () => now });
+    const song = n => ({ key: yt('ar', n), platform: 'youtube', title: `Grupo X - Tema ${n}`, artist: 'GrupoXVEVO' });
+    for (let n = 1; n <= 4; n++) {
+        assert.equal(memory.skip('list:a', song(n)).blocked, null);
+        now += DAY;
+    }
+    assert.ok(!memory.avoid('list:a').artists.has('grupox'), 'con 4 saltos, aún no');
+    memory.skip('list:b', song(9));
+    assert.ok(!memory.avoid('list:a').artists.has('grupox'), 'un salto en otra radio no suma');
+    const { skips, blocked } = memory.skip('list:a', song(5));
+    assert.equal(skips, 5);
+    assert.equal(blocked.until, new Date(now + ARTIST_BLOCK_MS).toISOString());
+    assert.ok(memory.avoid('list:a').artists.has('grupox'), 'al quinto, fuera');
+    assert.ok(!memory.avoid('list:b').artists.has('grupox'), 'solo en esa radio');
+    assert.ok(!memory.avoid('home').artists.has('grupox'));
+    now += ARTIST_BLOCK_MS - 1000;
+    assert.ok(memory.avoid('list:a').artists.has('grupox'), 'fuera hasta cumplir los 30 días');
+    now += 2000;
+    assert.ok(!memory.avoid('list:a').artists.has('grupox'), 'a los 30 días vuelve');
+    assert.equal(memory.skip('list:a', song(6)).skips, 1, 'los saltos de antes del bloqueo ya no cuentan');
+    assert.ok(!memory.avoid('list:a').artists.has('grupox'));
+});
+
+test('radio aprende: 5 saltos repartidos en más de 30 días no echan al artista', () => {
+    let now = Date.parse('2026-11-17T12:00:00Z');
+    const memory = new RadioMemory(tempDataDir(), { now: () => now });
+    for (let n = 1; n <= 5; n++) {
+        memory.skip('home', { key: yt('sp', n), platform: 'youtube', title: `Grupo Y - Tema ${n}`, artist: 'Grupo Y' });
+        now += 8 * DAY;          // saltos los días 0, 8, 16, 24 y 32
+    }
+    assert.ok(!memory.avoid('home').artists.has('grupoy'));
+});
+
+test('radio aprende: no pone lo saltado ni al artista que está fuera; otra radio sí', async () => {
+    const memory = new RadioMemory(tempDataDir());
+    // Grupo 1 (la mezcla de la semilla 1 trae 6 canciones suyas): 5 saltos en esta radio lo dejan fuera
+    for (let i = 0; i < 5; i++) memory.skip('list:a', { key: yt('own1x', i), platform: 'youtube', title: `Grupo 1 - Otra suya ${i}`, artist: 'Grupo 1' });
+    const skipped = { key: yt('mix1x', 0), platform: 'youtube', title: 'Banda 1-0 - Tema 1-0 (Official Video)', artist: 'Banda 1-0' };
+    memory.skip('list:a', skipped);
+    assert.ok(memory.avoid('list:a').artists.has('grupo1'));
+
+    const radio = new Radio({ fetchMix: fakeMixes(), random: rng(5) });
+    const seedKeys = [yt('seed', 1), yt('seed', 2)];
+    const inA = [];
+    for (let batch = 0; batch < 8; batch++) inA.push(...(await radio.batch({ scope: 'list:a', seedKeys, exclude: new SongSet(), memory })).tracks);
+    assert.ok(inA.length >= 30, `solo ${inA.length}`);
+    assert.ok(!inA.some(t => songSig(t).artist === 'grupo1'), 'Grupo 1 está fuera de esta radio');
+    assert.ok(!inA.some(t => t.key === skipped.key), 'la saltada no vuelve');
+
+    const inB = [];
+    for (let batch = 0; batch < 4; batch++) inB.push(...(await radio.batch({ scope: 'list:b', seedKeys, exclude: new SongSet(), memory })).tracks);
+    assert.ok(inB.some(t => songSig(t).artist === 'grupo1'), 'en otra radio Grupo 1 sí sale');
+    assert.ok(inB.some(t => t.key === skipped.key), 'y la saltada también');
+});
+
+test('radio aprende: al dejar una canción de la radio se sabe cuánto sonó, o si no llegó a sonar', () => {
+    let now = 1_000_000;
+    const sessions = new SessionStore(tempDataDir(), { now: () => now });
+    const radioTrack = n => ({ ...seedTrack(n), key: yt('rad', n), radio: true });
+    const [r1, r2, r3] = [1, 2, 3].map(radioTrack);
+    sessions.start({ source: { type: 'list', id: 'l_0123456789', name: 'rock' }, tracks: [seedTrack(9), r1, r2, r3] });
+    assert.equal(sessions.leaving(), null, 'una canción propia no cuenta');
+
+    now += 1000;
+    sessions.goto(1);
+    assert.deepEqual(sessions.leaving(), { track: r1, heardMs: null }, 'aún no ha empezado a sonar');
+    now += 12_000;
+    sessions.served(r1.key);          // en frío: el audio empieza a llegar a los 12 s
+    now += 8_000;
+    assert.equal(sessions.leaving().heardMs, 8_000, 'cuenta desde que empezó a sonar, no desde que se pidió');
+    now += 4_000;
+    sessions.report({ index: 1, positionMs: 12_000 });
+    now += 2_000;
+    assert.equal(sessions.leaving().heardMs, 14_000, 'desde el último informe de posición');
+
+    // La siguiente ya estaba cargada (el reproductor la pidió antes): cuenta desde que se pasó a ella
+    sessions.served(r2.key);
+    now += 5_000;
+    sessions.goto(2);
+    now += 3_000;
+    assert.equal(sessions.leaving().heardMs, 3_000);
+    sessions.markSaved(r2.key);
+    assert.equal(sessions.leaving(), null, 'guardada en una lista ya no es «de la radio»');
+
+    now += 1000;
+    sessions.goto(3);
+    sessions.served(r3.key);
+    now += 31_000;
+    sessions.report({ index: 3, positionMs: 31_000 });
+    assert.equal(sessions.leaving(), null, 'pasados 30 s cuenta como escuchada');
+});
+
+test('API: dejar antes de 15 s una canción que puso la radio de una lista lo aprende esa radio; oída un rato, sin llegar a sonar o propia, no', async () => {
+    const s = await startServer({ fetchMix: fakeMixes() });
+    try {
+        const list = s.lists.create('rock');
+        s.lists.addTracks(list.id, [0, 1, 2].map(seedTrack));
+        await s.call('PUT', '/api/radio', { enabled: true });
+        await s.call('POST', '/api/session', { listId: list.id, startKey: yt('seed', 2) });
+        assert.ok(await waitFor(async () => ((await s.call('GET', '/api/session')).body.session.count === 8 ? true : null)), 'llega la tanda');
+        const radioTracks = (await s.call('GET', '/api/session/queue?from=3&limit=5')).body.entries.map(e => e.track);
+        const memory = s.stores.for(s.owner.id).radio;
+        const scope = `list:${list.id}`;
+        const listen = async key => { await (await s.api(`/api/stream/${encodeURIComponent(key)}`, { token: s.token })).arrayBuffer(); };
+
+        await s.call('POST', '/api/session/goto', { index: 3 });          // deja una de la lista: no cuenta
+        assert.equal(memory.skips[scope], undefined);
+
+        await listen(radioTracks[0].key);                                    // suena y se deja enseguida: saltada
+        await s.call('POST', '/api/session/goto', { index: 4 });
+        assert.deepEqual(memory.skips[scope].map(e => e.key), [radioTracks[0].key]);
+
+        await listen(radioTracks[1].key);                                    // suena 20 s: no es un salto
+        await s.call('PUT', '/api/session/state', { index: 4, positionMs: 20_000 });
+        await s.call('POST', '/api/session/goto', { index: 5 });
+
+        await s.call('POST', '/api/session/goto', { index: 6 });          // se deja antes de que suene: no cuenta
+        assert.deepEqual(memory.skips[scope].map(e => e.key), [radioTracks[0].key], 'solo la primera');
+        assert.equal(memory.skips.home, undefined, '«Tu radio» no se entera');
+        assert.ok(new RadioMemory(s.stores.dir(s.owner.id)).skips[scope], 'queda en disco');
     } finally {
         await s.close();
     }

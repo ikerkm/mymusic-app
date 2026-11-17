@@ -12,7 +12,8 @@ import { readJson, writeJsonAtomic } from './fsutil.js';
 //   · memoria larga por usuario: lo que la radio ya puso no vuelve en semanas;
 //   · la misma canción en otro vídeo (oficial, con letra, remasterizada) cuenta como la misma;
 //   · fuera los vídeos muy largos o muy cortos (recopilatorios, directos enteros, cortes);
-//   · lo que pone la radio no sirve de semilla (salvo que el usuario lo guarde en una lista).
+//   · lo que pone la radio no sirve de semilla (salvo que el usuario lo guarde en una lista);
+//   · aprende de lo que el usuario salta, en cada radio por separado (RadioMemory.skip).
 
 export const RADIO_BATCH = 5;            // canciones por tanda
 export const RADIO_SEEDS = 3;            // semillas por tanda
@@ -25,6 +26,13 @@ const RECENT_ARTISTS = 15;               // artistas de las últimas N canciones
 const MIN_SEC = 60;
 const MAX_SEC = 600;
 const MAX_ROUNDS = 3;                    // veces que se amplía con más semillas si no salen suficientes
+// La radio aprende de lo que el usuario salta, en cada radio por separado (decisiones del usuario, 17-11)
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const SKIP_SONG_MS = 15 * DAY_MS;     // una canción saltada no vuelve a esa radio en este tiempo
+export const SKIP_ARTIST_COUNT = 5;          // saltos del mismo artista en una radio…
+const SKIP_WINDOW_MS = 30 * DAY_MS;          // …dentro de este plazo…
+export const ARTIST_BLOCK_MS = 30 * DAY_MS;  // …lo dejan fuera de esa radio este tiempo
+const SKIP_SCOPES_MAX = 40;                  // radios de las que se recuerdan saltos
 
 export const plain = text => String(text ?? '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
 
@@ -116,10 +124,75 @@ export class RadioMemory {
         this.enabled = saved.enabled === true;
         this.recent = Array.isArray(saved.recent) ? saved.recent : [];     // { key, title, artist, at } de más antigua a más reciente
         this.seeds = saved.seeds && typeof saved.seeds === 'object' ? saved.seeds : {};   // origen → claves ya usadas en esta vuelta
+        this.skips = saved.skips && typeof saved.skips === 'object' ? saved.skips : {};   // origen → [{ key, title, artist, at }] saltadas
+        this.blocks = saved.blocks && typeof saved.blocks === 'object' ? saved.blocks : {}; // origen → { firma del artista: { name, at, until } }
     }
 
     save() {
-        writeJsonAtomic(this.path, { enabled: this.enabled, recent: this.recent, seeds: this.seeds });
+        writeJsonAtomic(this.path, { enabled: this.enabled, recent: this.recent, seeds: this.seeds, skips: this.skips, blocks: this.blocks });
+    }
+
+    /**
+     * El usuario ha saltado una canción que puso la radio de `scope` («list:<id>», «home»…). Esa
+     * canción no vuelve a esa radio en 15 días; al quinto salto de un mismo artista en 30 días, el
+     * artista se queda fuera de esa radio 30 días. Las demás radios no se enteran.
+     * @returns {{ skips: number, blocked: {name, at, until}|null }}  saltos de ese artista que cuentan, y el bloqueo si acaba de empezar
+     */
+    skip(scope, track) {
+        if (!scope || !track?.key) return null;
+        const now = this.now();
+        const at = new Date(now).toISOString();
+        this.#prune(now);
+        const list = this.skips[scope] ?? [];
+        delete this.skips[scope];             // la radio usada hace menos, al final (las más viejas se olvidan antes)
+        list.push({ key: track.key, title: track.title ?? '', artist: track.artist ?? null, at });
+        this.skips[scope] = list;
+
+        const artist = songSig(track).artist;
+        let skips = 0;
+        let blocked = null;
+        if (artist) {
+            const blocks = this.blocks[scope] ?? {};
+            // Cuentan los saltos de los últimos 30 días posteriores a su último bloqueo (al acabar uno, empieza de cero)
+            const after = Date.parse(blocks[artist]?.at ?? '') || -Infinity;
+            skips = list.filter(entry => {
+                const time = Date.parse(entry.at);
+                return time >= now - SKIP_WINDOW_MS && time > after && songSig(entry).artist === artist;
+            }).length;
+            if (skips >= SKIP_ARTIST_COUNT && !(Date.parse(blocks[artist]?.until ?? '') > now)) {
+                blocked = { name: track.artist ?? artist, at, until: new Date(now + ARTIST_BLOCK_MS).toISOString() };
+                blocks[artist] = blocked;
+                delete this.blocks[scope];
+                this.blocks[scope] = blocks;
+            }
+        }
+        for (const old of Object.keys(this.skips).slice(0, -SKIP_SCOPES_MAX)) delete this.skips[old];
+        for (const old of Object.keys(this.blocks).slice(0, -SKIP_SCOPES_MAX)) delete this.blocks[old];
+        this.save();
+        return { skips, blocked };
+    }
+
+    /** Lo que la radio de `scope` no debe poner ahora: canciones saltadas hace menos de 15 días y artistas fuera. */
+    avoid(scope) {
+        const now = this.now();
+        const songs = new SongSet();
+        for (const entry of this.skips[scope] ?? []) if (Date.parse(entry.at) >= now - SKIP_SONG_MS) songs.add(entry);
+        const artists = new Set(Object.entries(this.blocks[scope] ?? {}).filter(([, block]) => Date.parse(block.until) > now).map(([sig]) => sig));
+        return { songs, artists };
+    }
+
+    // Fuera lo que ya no cuenta para nada: saltos de hace más de 30 días y bloqueos acabados
+    #prune(now) {
+        const keepFrom = now - Math.max(SKIP_WINDOW_MS, SKIP_SONG_MS);
+        for (const [scope, list] of Object.entries(this.skips)) {
+            const kept = Array.isArray(list) ? list.filter(entry => Date.parse(entry.at) >= keepFrom) : [];
+            if (kept.length) this.skips[scope] = kept;
+            else delete this.skips[scope];
+        }
+        for (const [scope, blocks] of Object.entries(this.blocks)) {
+            for (const [sig, block] of Object.entries(blocks ?? {})) if (!(Date.parse(block?.until) > now)) delete blocks[sig];
+            if (!blocks || Object.keys(blocks).length === 0) delete this.blocks[scope];
+        }
     }
 
     setEnabled(enabled) {
@@ -261,7 +334,10 @@ export class Radio {
         let failures = 0;
         let lastError = null;
 
-        const usable = () => [...candidates.values()].filter(c => !exclude.has(c.track) && !played.has(c.track));
+        // Lo que el usuario ha saltado en esta radio (otras radios no cuentan)
+        const avoid = typeof memory.avoid === 'function' ? memory.avoid(scope) : { songs: new SongSet(), artists: new Set() };
+        const usable = () => [...candidates.values()].filter(c => !exclude.has(c.track) && !played.has(c.track)
+            && !avoid.songs.has(c.track) && !avoid.artists.has(songSig(c.track).artist));
 
         for (let round = 0; round < MAX_ROUNDS; round++) {
             let seeds = this.#takeSeeds(memory, scope, pool.filter(key => !seedsUsed.includes(key)), RADIO_SEEDS);

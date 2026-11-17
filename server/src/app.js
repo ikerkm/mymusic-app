@@ -227,6 +227,8 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             log(`[stream] ${source.key}: ${error.message.slice(0, 300)}`);
             return res.status(502).json({ error: 'extract_failed', message: explain(error.message) });
         }
+        // Empieza a sonar: la radio lo necesita para saber cuánto se oyó una canción al saltarla
+        stores.for(req.user.id).sessions.served(req.params.key);
 
         const total = buffer.total;
         const range = parseRange(req.headers.range, total);
@@ -447,6 +449,26 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         return keys;
     }
 
+    // De qué radio es una sesión. Cada una rota sus semillas y aprende de sus saltos por separado:
+    // un salto en la radio de «rock» no le quita nada a «Tu radio» ni a la de otra lista.
+    function radioScope(source) {
+        if (source?.type === 'list' && source.id) return `list:${source.id}`;
+        if (source?.type === 'radio') return 'home';
+        if (source?.type === 'auto' && source.id) return `auto:${source.id}`;
+        return 'loose';
+    }
+
+    // Dejar antes de 15 s una canción que puso la radio = saltarla (decisión del usuario, 17-11)
+    const SKIP_MS = 15_000;
+    function noteSkip(req, source, { track, heardMs }) {
+        if (heardMs === null || heardMs >= SKIP_MS) return;      // no llegó a sonar, o ya se escuchó un rato
+        const scope = radioScope(source);
+        const result = req.ctx.radio.skip(scope, track);
+        if (!result) return;
+        const blocked = result.blocked ? `; ${result.blocked.name} queda fuera de esa radio hasta el ${result.blocked.until.slice(0, 10)}` : '';
+        log(`[radio] ${req.user.name} salta «${track.title}» a los ${Math.round(heardMs / 1000)} s (${scope})${blocked}`);
+    }
+
     /** Una tanda para el usuario. `home` = para empezar «Tu radio»; si no, para seguir la sesión abierta. */
     async function radioBatch(ctx, { home = false } = {}) {
         const { sessions, lists, history, radio: memory } = ctx;
@@ -483,7 +505,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             }
             for (const summary of lists.all()) (lists.get(summary.id)?.tracks ?? []).forEach(take);
         } else {
-            scope = 'loose';
+            scope = source?.type === 'auto' ? radioScope(source) : 'loose';
             seedTracks = inSession.filter(track => !track.radio || track.saved);
         }
         const seedKeys = await seedKeysOf(seedTracks);
@@ -617,7 +639,14 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
 
     priv.post('/session/goto', (req, res) => {
         if (otherDevice(req)) return res.status(409).json({ error: 'other_device' });
-        reply(req, res, req.ctx.sessions.goto(indexFrom(req)), 'bad_index');
+        const { sessions } = req.ctx;
+        const index = indexFrom(req);
+        // Si se deja una canción de la radio sin apenas oírla, la radio lo aprende
+        const leaving = Number.isInteger(index) && sessions.state && index !== sessions.state.index ? sessions.leaving() : null;
+        const source = sessions.session?.source;
+        const view = sessions.goto(index);
+        if (view && leaving) noteSkip(req, source, leaving);
+        reply(req, res, view, 'bad_index');
     });
 
     const setOptions = (req, res) => reply(req, res, req.ctx.sessions.setOptions(req.body ?? {}));

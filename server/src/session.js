@@ -13,6 +13,9 @@ const REPEAT = new Set(['off', 'all', 'one']);
 const PLAYED_AFTER_MS = 30_000;      // a partir de aquí una canción cuenta como escuchada
 
 export class SessionStore {
+    // Cuándo empezó a mandarse el audio de cada canción de esta sesión (para saber cuánto sonó al dejarla)
+    #served = new Map();
+
     constructor(dataDir, { now = Date.now, random = Math.random } = {}) {
         this.dataDir = dataDir;
         this.now = now;
@@ -95,7 +98,8 @@ export class SessionStore {
         }
         const id = `s_${randomBytes(5).toString('hex')}`;
         this.session = { id, source, createdAt: this.#iso(), shuffle: Boolean(shuffle), base, order, tracks: byKey };
-        this.state = { id, index, positionMs: 0, repeat: 'off', visit: 0, loggedVisit: -1, device };
+        this.state = { id, index, positionMs: 0, repeat: 'off', visit: 0, loggedVisit: -1, device, startedAt: this.now() };
+        this.#served.clear();
         this.#saveSession();
         this.#saveState();
         return this.view();
@@ -135,9 +139,35 @@ export class SessionStore {
             this.state.index = index;
             this.state.positionMs = 0;
             this.state.visit++;
+            this.state.startedAt = this.now();
+            delete this.state.reportedAt;
             this.#saveState();
         }
         return this.view();
+    }
+
+    /** El audio de `key` ha empezado a mandarse a un reproductor (se apunta la primera vez). */
+    served(key) {
+        if (this.session?.tracks[key] && !this.#served.has(key)) this.#served.set(key, this.now());
+    }
+
+    /**
+     * La canción que suena ahora, si es de la radio (sin guardar) y aún no cuenta como escuchada, con
+     * cuánto se ha oído: desde que se pasó a ella o desde que empezó a llegar su audio (lo que sea
+     * más tarde), o desde el último informe de posición. Con una pausa por medio sale de más, así que
+     * en la duda no cuenta como salto. `heardMs` null = no llegó a sonar. null si no es de la radio.
+     */
+    leaving() {
+        if (!this.session) return null;
+        const track = this.session.tracks[this.currentKey];
+        if (!track?.radio || track.saved || this.state.loggedVisit === this.state.visit) return null;
+        const served = this.#served.get(track.key);
+        if (served === undefined) return { track, heardMs: null };
+        const now = this.now();
+        const start = Math.max(this.state.startedAt ?? 0, served);
+        const reportedAt = this.state.reportedAt;
+        const heardMs = Number.isFinite(reportedAt) && reportedAt >= start ? this.state.positionMs + (now - reportedAt) : now - start;
+        return { track, heardMs: Math.max(0, heardMs) };
     }
 
     /**
@@ -146,6 +176,7 @@ export class SessionStore {
     report({ index, positionMs }) {
         if (!this.session || index !== this.state.index || !Number.isFinite(positionMs) || positionMs < 0) return null;
         this.state.positionMs = Math.round(positionMs);
+        this.state.reportedAt = this.now();
         let played = null;
         if (positionMs >= PLAYED_AFTER_MS && this.state.loggedVisit !== this.state.visit) {
             this.state.loggedVisit = this.state.visit;
