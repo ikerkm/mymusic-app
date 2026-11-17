@@ -6,6 +6,7 @@ import { LikeSet } from './likes.js';
 import { cleanTrack } from './lists.js';
 import { RADIO_SEEDS, SongSet } from './radio.js';
 import { parseKey, parseLink } from './sources.js';
+import { note, who } from './usage.js';
 import { explain } from './ytdlp.js';
 
 // Tramo pedido por el cliente. null = sin cabecera Range; 'invalid' = no se puede servir.
@@ -47,11 +48,14 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
     const requireAuth = auth.middleware();
+    // Consumo: lo que se haga a partir de aquí (extraer, buscar, leer mezclas) se apunta a este usuario,
+    // también lo que siga corriendo cuando la petición ya ha respondido
+    const asUser = (req, res, next) => (usage ? who.run({ userId: req.user.id, usage }, next) : next());
 
     // Una canción de Spotify se presenta con la carátula de su coincidencia y con quién la eligió
     const show = track => (matches ? matches.decorate(track) : track);
@@ -139,9 +143,10 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         res.json({ ok: true });
     });
 
-    app.get('/api/search', requireAuth, async (req, res) => {
+    app.get('/api/search', requireAuth, asUser, async (req, res) => {
         const query = String(req.query.q ?? '').trim().slice(0, 300);
         if (!query) return res.status(400).json({ error: 'empty_query' });
+        note({ searches: 1 });
         const shown = showFor(stores.for(req.user.id));
         try {
             // Un enlace pegado en el buscador: una canción suelta se devuelve como resultado único;
@@ -172,9 +177,16 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     // Pista que no cabe en memoria: tubería directa, sin poder saltar
     function pipeDirect(req, res, source) {
         const stream = open(source.url, { aacToAdts: source.aacToAdts });
-        res.on('close', () => stream.kill());
+        const began = Date.now();
+        let bytes = 0;
+        res.on('close', () => {
+            stream.kill();
+            // Lo que pasa en tubería directa se baja y se sirve a la vez: cuenta como las dos cosas
+            if (bytes > 0) note({ extractions: 1, extractBytes: bytes, extractMs: Date.now() - began, servedBytes: bytes });
+        });
         let started = false;
         stream.stdout.on('data', chunk => {
+            bytes += chunk.length;
             if (!started) {
                 started = true;
                 res.status(200).set({ 'Content-Type': sniffMime(chunk), 'Accept-Ranges': 'none', 'Cache-Control': 'private, no-store' });
@@ -190,7 +202,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         });
     }
 
-    app.get('/api/stream/:key', requireAuth, async (req, res) => {
+    app.get('/api/stream/:key', requireAuth, asUser, async (req, res) => {
         if (!parseKey(req.params.key)) return res.status(400).json({ error: 'bad_key' });
         let source;
         try {
@@ -230,8 +242,10 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         if (range) res.set('Content-Range', `bytes ${start}-${end}/${total}`);
 
         buffer.readers++;
+        let sent = 0;
         try {
             for await (const chunk of buffer.read(start, end, abort.signal)) {
+                sent += chunk.length;
                 if (!res.write(chunk)) await once(res, 'drain', { signal: abort.signal });
             }
             res.end();
@@ -239,6 +253,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             // Cliente desconectado o descarga rota: se corta la conexión y el reproductor reintenta
             res.destroy();
         } finally {
+            note({ servedBytes: sent });
             buffer.readers--;
             buffer.lastUsed = Date.now();
             cache.evict();
@@ -259,6 +274,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     // ------------------------------------------------------------------ Fase 2: listas, sesión, historial
     const priv = express.Router();
     priv.use(requireAuth);
+    priv.use(asUser);
     // Cada petición trabaja con las listas, la sesión y el historial de su usuario
     priv.use((req, res, next) => {
         req.ctx = stores.for(req.user.id);
@@ -424,6 +440,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         const seedKeys = await seedKeysOf(seedTracks);
         const fallbackKeys = home ? [] : inSession.filter(track => track.radio && !track.saved).map(track => track.key);
         const { tracks } = await radio.batch({ scope, seedKeys, fallbackKeys, exclude, memory });
+        note({ radioBatches: 1 });
         return { tracks, seeds: seedKeys.length, scope };
     }
 
@@ -547,6 +564,11 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         if (otherDevice(req)) return res.status(409).json({ error: 'other_device' });
         const result = req.ctx.sessions.report({ index: indexFrom(req), positionMs: Number(req.body?.positionMs) });
         if (result?.played) req.ctx.history.append(result.played);
+        if (result && usage) {
+            // Consumo: tiempo escuchado (lo que avanza la canción entre informes) y canciones que cuentan como escuchadas
+            usage.listened(req.user.id, req.ctx.sessions.view()?.window.current?.track.key, Number(req.body?.positionMs));
+            if (result.played) note({ plays: 1 });
+        }
         // `count` avisa al cliente de que la sesión ha crecido (la radio añadió canciones) y debe volver a pedirla
         maybeRadio(req.user.id);
         res.json({ ok: Boolean(result), count: req.ctx.sessions.count, radio: radioState(req.user.id).status });
@@ -780,6 +802,14 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         if (result.error) return res.status({ not_found: 404, bad_request: 400 }[result.error] ?? 409).json({ error: result.error });
         log(`[papelera] ${req.user.name} restaura ${type === 'list' ? 'la lista' : 'una canción en'} «${result.list.name}»`);
         res.json({ ok: true, added: result.added ?? null, list: req.ctx.lists.summaryOf(result.list) });
+    });
+
+    // --- Consumo: lo que gasta cada usuario y la máquina. Solo lo ve el dueño. ---
+    priv.get('/usage', (req, res) => {
+        if (!usage) return res.status(404).json({ error: 'not_found' });
+        if (!req.user.admin) return res.status(403).json({ error: 'forbidden' });
+        const days = Math.min(Math.max(int(req.query.days) ?? 7, 1), 92);
+        res.json(usage.report({ days, users: auth.users() }));
     });
 
     // --- Fase 4: «Probar extracción» (Ajustes) ---

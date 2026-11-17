@@ -1114,6 +1114,114 @@ function openTrash() {
     });
 }
 
+/**
+ * Consumo (solo el dueño): lo que gasta cada usuario, cómo está la máquina y cuántos oyentes a la
+ * vez caben según lo medido. Son cantidades: aquí no se ve qué escucha nadie.
+ */
+function openUsage() {
+    const num = (value, digits = 0) => Number(value ?? 0).toLocaleString('es-ES', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    const size = bytes => (bytes >= 1073741824 ? `${num(bytes / 1073741824, 1)} GB` : `${num(bytes / 1048576, bytes > 0 && bytes < 10485760 ? 1 : 0)} MB`);
+    const span = ms => {
+        const seconds = Math.round(ms / 1000);
+        if (seconds < 60) return `${seconds} s`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, '0')} s`;
+        return `${Math.floor(seconds / 3600)} h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')} min`;
+    };
+    const cpu = row => (row.cpuProcs > 0 ? span(row.cpuMs) : 'sin dato');
+    const when = iso => new Date(iso).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    const percent = share => `${num(share * 100, share < 0.1 ? 1 : 0)} %`;
+    const PERIODS = [[1, 'Hoy'], [7, '7 días'], [30, '30 días']];
+    const LIMITS = { slots: 'los turnos de extracción', memory: 'la memoria de audio', cpu: 'el procesador' };
+
+    openModal((close, modal) => {
+        modal.classList.add('wide');
+        let days = 7;
+        const tabs = h('div.seg');
+        const body = h('div.usage', null, h('p.note', null, 'Cargando…'));
+        const fact = (label, value, extra = null) => h('div.fact', null, h('small', null, label), h('b', null, value), extra && h('small.sub', null, extra));
+
+        const people = report => {
+            const rows = [...report.users, { name: 'Total', total: true, ...report.total }];
+            const name = row => row.name ?? 'Cuenta que ya no existe';
+            if (mobile()) {
+                return h('div.picks', null, rows.map(row => h('div.pick.usecard', { class: row.total ? 'tot' : '' }, h('div.tx', null,
+                    h('b', null, name(row)),
+                    h('small', null, `Escuchado ${span(row.listenedMs)} · ${songs(row.plays)}`),
+                    h('small', null, `Servido ${size(row.servedBytes)} · bajado ${size(row.extractBytes)} en ${num(row.extractions)} extracciones`),
+                    h('small', null, `Procesador ${cpu(row)} · ${num(row.searches)} búsquedas · ${num(row.radioBatches)} de radio`)))));
+            }
+            return h('table.usetable', null,
+                h('thead', null, h('tr', null, ['Usuario', 'Escuchado', 'Canciones', 'Servido', 'Extracciones', 'Bajado', 'Procesador', 'Búsquedas', 'Radio'].map((title, i) => h(i ? 'th.r' : 'th', null, title)))),
+                h('tbody', null, rows.map(row => h('tr', { class: row.total ? 'tot' : '' },
+                    h('td', null, name(row)),
+                    [span(row.listenedMs), num(row.plays), size(row.servedBytes), num(row.extractions) + (row.extractFails ? ` (+${num(row.extractFails)} fallidas)` : ''),
+                        size(row.extractBytes), cpu(row), num(row.searches), num(row.radioBatches)].map(value => h('td.r', null, value))))));
+        };
+
+        const fits = report => {
+            const { basis, perListener: per, limits, bottleneck } = report.capacity;
+            if (!per) return h('p.note', null, 'Todavía no hay nada escuchado en este periodo: no hay con qué hacer la cuenta.');
+            const worst = limits[bottleneck];
+            return [
+                h('div.facts', null,
+                    fact('Por turnos de extracción', `≈ ${num(limits.slots)} oyentes`, `${num(report.limits.slots)} a la vez; cada oyente ocupa el ${percent(per.slotShare)} de uno`),
+                    fact('Por memoria de audio', `≈ ${num(limits.memory)} oyentes`, `${num(report.limits.cacheMB)} MB; cada oyente fija ${num(per.memoryMB, 1)} MB`),
+                    fact('Por procesador', limits.cpu === null ? 'sin dato' : `≈ ${num(limits.cpu)} oyentes`,
+                        limits.cpu === null ? 'este sistema no da el procesador de cada extracción' : `${num(report.limits.cores)} núcleos; cada oyente gasta el ${percent(per.cpuShare)} de uno`)),
+                !basis.enough && h('p.note.warn', null, `Aún hay pocos datos en este periodo (${num(basis.listenHours, 1)} h escuchadas, ${num(basis.extractions)} extracciones): la cuenta de abajo no es de fiar todavía. Se afina con el uso.`),
+                h('p.note.big', null, `${worst === 1 ? 'Con lo medido cabe 1 oyente' : `Con lo medido caben unos ${num(worst)} oyentes`} a la vez. El límite lo ponen ${LIMITS[bottleneck]}.`),
+                h('p.note', null, `Cada oyente provoca ${num(per.extractionsPerHour, 1)} extracciones por hora de escucha, de ${num(per.extractMB, 1)} MB y ${num(per.extractSeconds, 1)} s cada una, y pide de media ${num(per.upKbps)} kbps de subida y ${num(per.downKbps)} kbps de bajada.`),
+                h('p.note', null, 'Es una cuenta con medias, usando el 60 % de turnos y procesador para dejar holgura. No cuenta la subida de tu conexión ni lo que YouTube deje extraer desde una sola dirección.'),
+            ];
+        };
+
+        const peak = (report, name, label, show) => {
+            const top = report.peaks[name];
+            return fact(label, top ? show(top.value) : 'sin dato', top && top.value > 0 ? when(top.at) : null);
+        };
+
+        async function fill() {
+            tabs.replaceChildren(...PERIODS.map(([n, label]) => h('button.btn', { type: 'button', class: n === days ? 'pri' : '', onclick: () => { days = n; fill(); } }, label)));
+            let report;
+            try {
+                report = await api('GET', `/usage?days=${days}`);
+            } catch (error) {
+                return body.replaceChildren(h('p.err', null, error.status === 403 ? 'Solo lo puede ver el dueño.' : 'No se pudo leer el consumo.'));
+            }
+            const now = report.now;
+            body.replaceChildren(...[
+                h('div.sec', null, 'Ahora'),
+                h('div.facts', null,
+                    fact('Oyentes a la vez', num(now.listeners)),
+                    fact('Extracciones en marcha', num(now.running), now.waiting ? `${num(now.waiting)} esperando turno` : `de ${num(report.limits.slots)} a la vez`),
+                    fact('Audio en memoria', `${num(now.cacheMB)} MB`, `de ${num(report.limits.cacheMB)} MB`),
+                    fact('Memoria del servidor', `${num(now.rssMB)} MB`, `${size(now.freeMB * 1048576)} libres en la máquina`)),
+                h('div.sec', null, days === 1 ? 'Por usuario · hoy' : `Por usuario · últimos ${days} días`),
+                people(report),
+                h('div.sec', null, 'Máximos del periodo'),
+                report.samples === 0 ? h('p.note', null, 'Aún no hay muestras de la máquina en este periodo (se toma una por minuto mientras alguien escucha).') : h('div.facts', null,
+                    peak(report, 'listeners', 'Oyentes a la vez', value => num(value)),
+                    peak(report, 'running', 'Extracciones a la vez', value => num(value)),
+                    peak(report, 'waiting', 'Esperando turno', value => num(value)),
+                    peak(report, 'cacheMB', 'Audio en memoria', value => `${num(value)} MB`),
+                    peak(report, 'rssMB', 'Memoria del servidor', value => `${num(value)} MB`),
+                    peak(report, 'childCpu', 'Procesador de las extracciones', value => `${num(value)} % de un núcleo`),
+                    peak(report, 'nodeCpu', 'Procesador del servidor', value => `${num(value)} % de un núcleo`)),
+                h('div.sec', null, 'Cuántos caben'),
+                fits(report),
+            ].flat(Infinity).filter(Boolean));
+        }
+        fill();
+        return [
+            h('h2', null, 'Consumo'),
+            h('p.note', null, 'Lo que gasta cada usuario y la máquina. Solo cantidades: aquí no se ve qué escucha nadie. Una canción que ya estaba en memoria porque la pidió otro solo le cuenta a quien la hizo extraer.'),
+            tabs,
+            body,
+            h('div.acts', null, h('button.btn', { type: 'button', onclick: fill }, 'Actualizar'), h('button.btn', { type: 'button', onclick: close }, 'Cerrar')),
+        ];
+    });
+}
+
 function openSettings() {
     openModal(close => {
         const trashInfo = h('small.sub', null, 'Lo que has quitado, por si quieres recuperarlo');
@@ -1149,6 +1257,9 @@ function openSettings() {
             probeRow(),
             h('div.rowline', null, h('div', null, h('b', null, 'Papelera'), trashInfo),
                 h('button.btn', { type: 'button', onclick: () => { close(); openTrash(); } }, 'Abrir')),
+            // Solo el dueño: cuánto gasta cada usuario y cuántos caben
+            st.user?.admin && h('div.rowline', null, h('div', null, h('b', null, 'Consumo'), h('small.sub', null, 'Lo que gasta cada usuario y la máquina')),
+                h('button.btn', { type: 'button', onclick: () => { close(); openUsage(); } }, 'Ver')),
             h('div.sec', null, 'Cambiar contraseña'),
             l1, current, l2, fresh, l3, again,
             message,

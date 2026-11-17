@@ -61,7 +61,7 @@ export const PASSWORD = 'una-clave-de-prueba';
 export const OWNER = 'duena';
 
 // Servidor de prueba en un puerto libre, con yt-dlp y el buscador sustituidos por dobles
-export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers, webDir, fetchMix, probeTimeoutMs, radioTimeoutMs } = {}) {
+export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers, webDir, fetchMix, probeTimeoutMs, radioTimeoutMs, usageOptions = {} } = {}) {
     const [{ createApp }, { Auth }, { AudioCache }, { UserStores }] = await Promise.all([
         import('../src/app.js'), import('../src/auth.js'), import('../src/audio.js'), import('../src/stores.js'),
     ]);
@@ -77,10 +77,12 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
     const { MatchStore } = await import('../src/matches.js');
     const { PendingImports } = await import('../src/importers.js');
     const { Radio } = await import('../src/radio.js');
+    const { Usage } = await import('../src/usage.js');
+    const usage = new Usage(dir, { cache, cores: 4, ...usageOptions });
     // Buscador de coincidencias y lectores de listas de fuera: dobles, sin red
     const matches = new MatchStore(dir, { search: matchSearch ?? (async () => []) });
     const app = createApp({
-        auth, cache, open, stores, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
+        auth, cache, open, stores, usage, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
         matches, importers: importers ?? {}, pending: new PendingImports(), webDir,
         radio: fetchMix ? new Radio({ fetchMix, mixTimeoutMs: radioTimeoutMs ?? 2000 }) : null, ...(probeTimeoutMs ? { probeTimeoutMs } : {}),
         search: search ?? (async q => [{ key: 'yt:dQw4w9WgXcQ', title: `resultado de ${q}` }]),
@@ -99,7 +101,7 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
         const res = await api(path, { method, token: as, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
         return { status: res.status, body: await res.json().catch(() => null) };
     };
-    return { dir, auth, owner, stores, cache, open, lists, sessions, history, matches, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
+    return { dir, auth, owner, stores, cache, open, usage, lists, sessions, history, matches, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
 }
 
 export async function collect(iterable) {

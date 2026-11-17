@@ -4,6 +4,8 @@
 //
 //   node scripts/web-check.mjs http://127.0.0.1:3101 <usuario> <carpeta para las capturas>
 //   (la contraseña se lee de la variable MYMUSIC_CHECK_PASSWORD)
+//   Con MYMUSIC_CHECK_ADMIN y MYMUSIC_CHECK_ADMIN_PASSWORD (la cuenta del dueño) prueba además la
+//   pantalla «Consumo», que solo ve él. <usuario> conviene que NO sea el dueño: así se comprueba que no la ve.
 //
 // No usa dependencias: habla con el navegador por su protocolo de depuración.
 
@@ -356,6 +358,11 @@ try {
     await js(`document.querySelector('.who').click()`);
     check('Ajustes muestra el usuario', await until(`${text('.modal')}.includes(${JSON.stringify(user)}) && ${text('.modal h2')} === 'Ajustes'`, 5000));
     await shot('9_ajustes');
+    // «Consumo» es solo del dueño: a los demás ni se les enseña ni se les da
+    const isAdmin = await js(`fetch('/api/me', { credentials: 'same-origin' }).then(r => r.json()).then(me => me.user.admin === true)`);
+    const usageRow = await js(`[...document.querySelectorAll('.modal .rowline b')].some(e => e.textContent === 'Consumo')`);
+    const usageStatus = await js(`fetch('/api/usage', { credentials: 'same-origin' }).then(r => r.status)`);
+    check(isAdmin ? 'Consumo: el dueño lo tiene en Ajustes' : 'Consumo: quien no es el dueño no lo ve en Ajustes ni puede pedirlo', usageRow === isAdmin && usageStatus === (isAdmin ? 200 : 403), `fila ${usageRow}, respuesta ${usageStatus}`);
     await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
 
     // 6b. Fase 4 — «Probar extracción» (lee de YouTube de verdad, como buscar)
@@ -607,8 +614,52 @@ try {
     await js(clickText('.modal .btn', 'Cerrar sesión'));
     check(`${M}cerrar sesión vuelve a la pantalla de entrar`, await until(`!!document.querySelector('.login input[name=username]')`, 8000));
 
+    // 10. Consumo (solo el dueño): lo que gasta cada usuario, la máquina y cuántos caben
+    const admin = process.env.MYMUSIC_CHECK_ADMIN;
+    const adminPassword = process.env.MYMUSIC_CHECK_ADMIN_PASSWORD;
+    if (admin && adminPassword) {
+        const C = 'consumo: ';
+        const openUsage = async () => {
+            await js(`(document.querySelector('.who').offsetParent ? document.querySelector('.who') : document.querySelector('.main .top .ib')).click()`);
+            await until(`${text('.modal h2')} === 'Ajustes'`, 5000);
+            await js(`[...document.querySelectorAll('.modal .rowline')].find(e => e.querySelector('b')?.textContent === 'Consumo').querySelector('.btn').click()`);
+            return until(`${text('.modal h2')} === 'Consumo' && document.querySelectorAll('.modal .fact').length >= 4`, 8000);
+        };
+        const fitsModal = `document.querySelector('.modal').scrollWidth <= document.querySelector('.modal').clientWidth + 1`;
+        await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+        await send('Page.navigate', { url: `${base}/` });
+        await until(`!!document.querySelector('.login input[name=username]')`);
+        await js(typeInto('.login input[name=username]', admin));
+        await js(typeInto('.login input[name=password]', adminPassword));
+        await js(`document.querySelector('.login form').requestSubmit()`);
+        check(`${C}el dueño entra`, await until(`${text('.main h3')} === 'Inicio' && ${text('.who')}.includes(${JSON.stringify(admin)})`, 10000));
+        check(`${C}se abre desde Ajustes, con la máquina de ahora`, Boolean(await openUsage()));
+        const names = await until(`document.querySelectorAll('.modal .usetable tbody tr').length >= 2 && [...document.querySelectorAll('.modal .usetable tbody tr td:first-child')].map(e => e.textContent).join('|')`, 8000);
+        check(`${C}la tabla trae cada usuario y el total`, String(names).includes(user) && String(names).includes(admin) && String(names).endsWith('Total'), String(names));
+        const heard = await js(`(() => { const row = [...document.querySelectorAll('.modal .usetable tbody tr')].find(r => r.cells[0].textContent === ${JSON.stringify(user)}); return row ? [...row.cells].map(c => c.textContent).join(' | ') : ''; })()`);
+        check(`${C}lo que ha gastado «${user}» en esta misma prueba está apuntado`, / [1-9]\d* (s|min)/.test(heard) && !/\| 0 MB \| 0 \|/.test(heard), heard);
+        check(`${C}dice cuántos caben y con qué límite`, await until(`/Con lo medido cabe(n unos)? \\d+ oyentes? a la vez/.test(${text('.modal .usage')})`, 5000), await js(`document.querySelector('.modal .note.big')?.textContent ?? ''`));
+        check(`${C}cabe en el diálogo`, await js(fitsModal));
+        await shot('c1_consumo');
+        await js(clickText('.modal .seg .btn', 'Hoy'));
+        check(`${C}«Hoy» cambia el periodo`, await until(`${text('.modal .usage')}.includes('Por usuario · hoy') && !!document.querySelector('.modal .seg .btn.pri')?.textContent.startsWith('Hoy')`, 8000));
+        await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
+
+        await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+        await until(`document.documentElement.classList.contains('m')`, 5000);
+        check(`${C}en pantalla estrecha sale en tarjetas y cabe`, Boolean(await openUsage()) && Boolean(await until(`document.querySelectorAll('.modal .usecard').length >= 2 && !document.querySelector('.modal .usetable')`, 8000)) && await js(`${fitsModal} && ${fits}`));
+        await shot('c2_consumo_movil');
+        await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
+        await tap(q('.main .top .ib'));
+        await until(`!!document.querySelector('.modal')`);
+        await js(clickText('.modal .btn', 'Cerrar sesión'));
+        await until(`!!document.querySelector('.login input[name=username]')`, 8000);
+    }
+
     // Respuestas que la propia prueba provoca y el navegador apunta en la consola: no son fallos
-    const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/];
+    const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/, /status of 403 .*\/api\/usage/];
     const real = problems.filter(problem => !expected.some(pattern => pattern.test(problem)));
     check('sin errores de JavaScript ni de carga en la consola', real.length === 0, real.slice(0, 5).join(' | '));
 } catch (error) {

@@ -10,6 +10,7 @@ import { MatchStore } from './matches.js';
 import { Radio, mixUrl } from './radio.js';
 import { searchYoutube } from './sources.js';
 import { UserStores } from './stores.js';
+import { Usage } from './usage.js';
 import { fetchPlaylist, openAudio } from './ytdlp.js';
 
 dotenv.config({ path: join(config.root, '.env') });
@@ -33,9 +34,12 @@ const cache = new AudioCache({
     open: openAudio,
     log,
 });
+// Consumo: lo que gasta cada usuario y la máquina (lo ve el dueño en el panel)
+const usage = new Usage(config.dataDir, { cache, cores: config.cores, log });
 const app = createApp({
     auth,
     cache,
+    usage,
     search: searchYoutube,
     open: openAudio,
     stores,
@@ -55,11 +59,13 @@ const server = app.listen(config.port, config.host, () => {
     const users = auth.users();
     if (users.length === 0) log('[mymusic] AVISO: no hay ningún usuario. Crea el primero: node scripts/users.mjs add <nombre>');
     else log(`[mymusic] usuarios: ${users.map(user => user.name + (user.admin ? ' (dueño)' : '')).join(', ')}`);
+    usage.start();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
         log(`[mymusic] ${signal}: cerrando`);
+        usage.stop();        // guarda los contadores del último minuto
         server.close(() => process.exit(0));
         setTimeout(() => process.exit(0), 3000).unref();
     });

@@ -378,3 +378,23 @@ div.pick{cursor:default}
 .m .listhead .cv.like .ic{width:30px;height:30px}
 .m .card .cv.like .ic{width:20px;height:20px}
 .m .sheet .opt .ic.liked{color:var(--acc)}
+
+/* ====================================================================================
+   Consumo (solo el dueño, desde Ajustes): lo que gasta cada usuario y la máquina.
+   ==================================================================================== */
+.modal.wide{width:960px}
+.seg{display:flex;gap:6px;margin-top:14px}
+.seg .btn{height:32px;padding:0 14px;font-size:12.5px}
+.facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px}
+.fact{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-width:0}
+.fact small{display:block;color:var(--mut);font-size:11.5px}
+.fact b{display:block;font-size:17px;font-weight:700;margin:2px 0}
+.usetable{table-layout:auto;margin-top:0}
+.usetable td.r,.usetable th.r{width:auto;text-align:right;color:var(--tx)}
+.usetable tr.tot td{font-weight:700;border-top:1px solid var(--line);border-bottom:0}
+.usage .note.big{color:var(--tx);font-size:14px;font-weight:650}
+.usage .note.warn{color:var(--sc)}
+.usecard .tx small{display:block;color:var(--mut);font-size:12px;white-space:normal}
+.usecard.tot{border-top:1px solid var(--line)}
+.m .facts{grid-template-columns:1fr 1fr}
+.m .fact b{font-size:15px}

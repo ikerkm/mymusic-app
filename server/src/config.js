@@ -8,7 +8,7 @@ const num = (v, def) => (v !== undefined && v !== '' && Number.isFinite(Number(v
 // antes de que index.js cargue el .env (lección del bot, 2026-09-18).
 export const config = {
     get root() { return ROOT; },
-    get version() { return '0.8.0'; },
+    get version() { return '0.9.0'; },
     get webDir() { return join(ROOT, 'web'); },
     get dataDir() { return process.env.MYMUSIC_DATA || join(ROOT, 'data'); },
     get host() { return process.env.MYMUSIC_HOST || '127.0.0.1'; },
@@ -28,4 +28,6 @@ export const config = {
     get ownerName() { return process.env.MYMUSIC_OWNER_NAME || 'admin'; },
     // Cuántas canciones se extraen a la vez como mucho; las demás esperan su turno
     get maxExtractions() { return num(process.env.MYMUSIC_MAX_EXTRACTIONS, 3); },
+    // Núcleos que puede usar el servidor, para la cuenta de cuántos oyentes caben (0 = los que vea Node)
+    get cores() { return num(process.env.MYMUSIC_CORES, 0); },
 };

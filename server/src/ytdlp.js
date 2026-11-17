@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import { config } from './config.js';
+import { trackChild } from './usage.js';
 
 // Punto de partida: utils/ytdlpWrapper.js del bot de Discord (commit a2a4e99). Copia independiente.
 // Diferencias: no pasa por ffmpeg (el móvil reproduce el formato original) y pide a yt-dlp que
@@ -40,6 +41,7 @@ export function openAudio(url, { aacToAdts = false } = {}) {
         url,
     ];
     const child = spawn(config.ytdlpPython, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    trackChild(child);       // su tiempo de procesador se apunta a quien pidió la canción
 
     let stderr = '';
     let resolveMeta;
@@ -85,6 +87,7 @@ export function openAudio(url, { aacToAdts = false } = {}) {
     meta.then(info => {
         if (!String(info?.acodec ?? '').startsWith('mp4a')) return child.stdout.pipe(out);
         ffmpeg = spawn(config.ffmpegPath, ['-loglevel', 'error', '-i', 'pipe:0', '-vn', '-c:a', 'copy', '-f', 'adts', 'pipe:1'], { stdio: ['pipe', 'pipe', 'ignore'] });
+        trackChild(ffmpeg);
         ffmpeg.on('error', () => out.destroy());
         ffmpeg.stdin.on('error', () => {});     // si ffmpeg muere antes, yt-dlp recibe EPIPE: no es un fallo aparte
         child.stdout.pipe(ffmpeg.stdin);
@@ -118,6 +121,7 @@ export function fetchInfo(url, { playlist = false, limit = 100 } = {}) {
             url,
         ];
         const child = spawn(config.ytdlpPython, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        trackChild(child);
         let out = '';
         let err = '';
         child.stdout.setEncoding('utf8').on('data', text => { out += text; });
@@ -150,6 +154,7 @@ export function fetchPlaylist(url, { limit = 2000 } = {}) {
             url,
         ];
         const child = spawn(config.ytdlpPython, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+        trackChild(child);
         let out = '';
         let err = '';
         child.stdout.setEncoding('utf8').on('data', text => { out += text; });

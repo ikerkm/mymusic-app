@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter, once } from 'node:events';
+import { note, noteRunning } from './usage.js';
 
 // El audio de cada canción vive en memoria RAM mientras se usa (D9 de la SPEC): nada toca el disco.
 // Un TrackBuffer se va llenando con lo que manda yt-dlp y sirve cualquier tramo ya recibido,
@@ -149,8 +151,11 @@ export class AudioCache {
     // Arranca la extracción si hay hueco; si no, la deja en cola. El hueco se libera cuando la
     // canción termina, bien o mal, con sus reintentos incluidos.
     #schedule(buffer, url, options) {
-        const start = () => {
+        // La extracción se apunta a quien la pidió, también si le toca esperar turno y arranca más
+        // tarde, desde el trabajo de otro: por eso se ata aquí al contexto de quien la encarga.
+        const start = AsyncLocalStorage.bind(() => {
             this.running++;
+            noteRunning(this.running, this.waiting.length);
             const release = () => {
                 if (!buffer.done) return;
                 buffer.ev.off('tick', release);
@@ -160,9 +165,10 @@ export class AudioCache {
             buffer.ev.on('tick', release);
             this.#fill(buffer, url, options);
             release();          // por si ha fallado en el acto
-        };
-        if (this.running < this.maxConcurrent) start();
-        else this.waiting.push(start);
+        });
+        if (this.running < this.maxConcurrent) return start();
+        this.waiting.push(start);
+        noteRunning(this.running, this.waiting.length);
     }
 
     #drop(buffer) {
@@ -209,6 +215,7 @@ export class AudioCache {
                 if (attempt < this.attempts) {
                     // Quien esté esperando esta canción sigue esperando: no se entera del primer fallo
                     this.log(`[audio] ${buffer.key}: intento ${attempt} fallido ${after}: ${reason} — se reintenta`);
+                    note({ extractMs: Date.now() - started });      // el tiempo del intento fallido también ocupó un turno
                     return this.#fill(buffer, url, options, attempt + 1);
                 }
                 const error = new Error(stderr || 'yt-dlp no produjo audio');
@@ -216,13 +223,16 @@ export class AudioCache {
                 buffer.fail(error);
                 this.#drop(buffer);
                 this.log(`[audio] ${buffer.key}: FALLÓ ${after}: ${reason}`);
+                note({ extractFails: 1, extractMs: Date.now() - started });
             } else if (code !== 0 && buffer.declared !== null && buffer.size < buffer.declared) {
                 buffer.fail(new Error('La descarga se cortó a medias'));
                 this.#drop(buffer);
                 this.log(`[audio] ${buffer.key}: descarga cortada a medias (${buffer.size} de ${buffer.declared} bytes, código ${code})`);
+                note({ extractFails: 1, extractBytes: buffer.size, extractMs: Date.now() - started });
             } else {
                 buffer.finish();
                 this.log(`[audio] ${buffer.key}: completa, ${(buffer.size / 1048576).toFixed(1)} MB en ${((Date.now() - started) / 1000).toFixed(1)} s`);
+                note({ extractions: 1, extractBytes: buffer.size, extractMs: Date.now() - started });
             }
             this.evict();
         });
