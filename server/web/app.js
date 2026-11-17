@@ -1768,7 +1768,7 @@ function renderSide() {
     if (!ui) return;
     const view = st.view;
     ui.side.replaceChildren(
-        h('div.brand', null, h('b'), 'MyMusic'),
+        h('div.brand', null, h('img.brandimg', { src: 'icon-192.png', alt: '' }), 'MyMusic'),
         h('button.nav', { type: 'button', class: ['home', 'history', 'auto', 'stats'].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
         h('button.nav', { type: 'button', class: ['search', ...ARTIST_VIEWS].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'search' }) }, icon('search'), 'Buscar'),
         // En pantalla estrecha no hay barra lateral: las listas son la tercera pestaña
@@ -2748,7 +2748,7 @@ function showLogin(message = null) {
             submit.disabled = false;
         }
     } },
-        h('div.logo'),
+        h('img.logo', { src: 'icon-192.png', alt: '' }),
         h('h1', null, 'MyMusic'),
         h('div.mut', null, 'Tu música, desde tu servidor'),
         h('label', null, 'Usuario'), user,

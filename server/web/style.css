@@ -58,6 +58,8 @@ input{font:inherit;color:inherit}
 .side{background:var(--side);border-right:1px solid var(--line);padding:16px 12px 0;display:flex;flex-direction:column;gap:2px;min-height:0}
 .brand{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:700;margin:0 6px 14px}
 .brand b{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#ff6bd6,#5b2bff)}
+.brand .brandimg{width:26px;height:26px;border-radius:8px;object-fit:cover;flex:none}
+img.logo{display:block;object-fit:cover;background:none}
 .nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-weight:600;width:100%;text-align:left}
 .nav:hover{color:var(--tx)}
 .nav.on{background:var(--sur2);color:var(--tx)}
