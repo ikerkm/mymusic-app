@@ -109,6 +109,7 @@ object MmIcons {
     val Bin = line("M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13")
     val Edit = line("M4 20h4L19 9l-4-4L4 16z", "M13 7l4 4")
     val Swap = line("M4 8h14l-3-3M20 16H6l3 3")
+    val Radio = line(dot(12f, 12f, 2f), "M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8")
 }
 
 /** 42000 s → «11 h 40 min»; 1500 s → «25 min». */

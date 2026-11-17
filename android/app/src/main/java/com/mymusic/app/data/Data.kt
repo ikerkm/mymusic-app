@@ -25,6 +25,8 @@ data class Track(
      * "pending" (aún sin buscar), "auto" (la eligió el servidor) o "manual" (la eligió el usuario).
      */
     val match: String? = null,
+    /** La puso la radio y el usuario aún no la ha guardado en una lista (Fase 4). Solo viene dentro de una sesión. */
+    val radio: Boolean = false,
 )
 
 /** Lo que trae una playlist de fuera, antes de confirmar que se añade a una lista propia. */
@@ -66,12 +68,31 @@ data class SessionView(
     val repeat: String,          // off | all | one
     val positionMs: Long,
     val active: Boolean,         // ¿es este dispositivo el que lleva la sesión? (una por usuario, compartida entre sus dispositivos)
+    val radioOn: Boolean,        // la casilla «Radio» del usuario
+    val radioStatus: String,     // idle | loading (buscando canciones parecidas) | empty | error
     val prev: Entry?,
     val current: Entry?,
     val next: Entry?,
 )
 
 data class QueuePage(val index: Int, val count: Int, val entries: List<Entry>)
+
+// --- Fase 4: papelera y «Probar extracción» ---
+
+/** Una lista en la papelera. `id` es el nombre de su archivo allí. */
+data class TrashedList(val id: String, val name: String, val count: Int, val thumb: String?, val removedAt: String?)
+
+/** Una canción quitada de una lista. `listId` es null si esa lista ya no existe. */
+data class TrashedTrack(val id: String, val track: Track, val listId: String?, val listName: String?, val removedAt: String?)
+
+data class Trash(val lists: List<TrashedList>, val tracks: List<TrashedTrack>) {
+    val size: Int get() = lists.size + tracks.size
+}
+
+data class ProbePart(val ok: Boolean, val ms: Long, val message: String?)
+
+/** Resultado de «Probar extracción»: si responde el buscador y si YouTube entrega audio. */
+data class ProbeResult(val search: ProbePart, val extract: ProbePart)
 
 /** Versión de la app publicada en el servidor. */
 data class AppRelease(val versionCode: Int, val versionName: String, val sha256: String, val size: Long, val notes: String?)
@@ -111,6 +132,7 @@ private fun JSONObject.toTrack() = Track(
     thumb = str("thumb"),
     platform = optString("platform", "youtube"),
     match = str("match"),
+    radio = optBoolean("radio") && !optBoolean("saved"),
 )
 
 private fun Track.toJson(): JSONObject = JSONObject()
@@ -138,6 +160,8 @@ private fun JSONObject.toSession(): SessionView {
         repeat = optString("repeat", "off"),
         positionMs = optLong("positionMs"),
         active = optBoolean("active", true),
+        radioOn = optJSONObject("radio")?.optBoolean("enabled") ?: false,
+        radioStatus = optJSONObject("radio")?.optString("status", "idle") ?: "idle",
         prev = window.entry("prev"),
         current = window.entry("current"),
         next = window.entry("next"),
@@ -311,6 +335,47 @@ class Api(private val prefs: Prefs) {
 
     suspend fun removeQueued(key: String): SessionView =
         call("DELETE", "/api/session/queue/${enc(key)}").getJSONObject("session").toSession()
+
+    // --- Radio (Fase 4) ---
+
+    /** ¿Tiene el usuario marcada la casilla «Radio»? */
+    suspend fun radio(): Boolean = call("GET", "/api/radio").getJSONObject("radio").optBoolean("enabled")
+
+    suspend fun setRadio(enabled: Boolean): Boolean =
+        call("PUT", "/api/radio", JSONObject().put("enabled", enabled)).getJSONObject("radio").optBoolean("enabled")
+
+    /** «Tu radio»: una sesión de canciones parecidas a lo que escucha. Tarda lo que tarde YouTube en dar las mezclas. */
+    suspend fun startHomeRadio(): SessionView =
+        call("POST", "/api/session", JSONObject().put("radio", "home"), readTimeoutMs = 110_000).getJSONObject("session").toSession()
+
+    // --- Papelera (Fase 4) ---
+
+    suspend fun trash(): Trash = call("GET", "/api/trash").let { o ->
+        val lists = o.getJSONArray("lists")
+        val tracks = o.getJSONArray("tracks")
+        Trash(
+            lists = List(lists.length()) { i ->
+                lists.getJSONObject(i).let { TrashedList(it.getString("id"), it.optString("name"), it.optInt("count"), it.str("thumb"), it.str("removedAt")) }
+            },
+            tracks = List(tracks.length()) { i ->
+                tracks.getJSONObject(i).let { TrashedTrack(it.getString("id"), it.getJSONObject("track").toTrack(), it.str("listId"), it.str("listName"), it.str("removedAt")) }
+            },
+        )
+    }
+
+    /** Devuelve a su sitio una lista ("list") o una canción ("track"); `listId` solo si la canción va a otra lista. */
+    suspend fun restoreTrashed(type: String, id: String, listId: String? = null): ListSummary {
+        val body = JSONObject().put("type", type).put("id", id)
+        if (listId != null) body.put("listId", listId)
+        return call("POST", "/api/trash/restore", body).getJSONObject("list").toSummary()
+    }
+
+    // --- «Probar extracción» (Fase 4) ---
+
+    suspend fun probe(): ProbeResult = call("POST", "/api/diagnostics/extract", JSONObject(), readTimeoutMs = 70_000).let { o ->
+        fun part(name: String) = o.getJSONObject(name).let { ProbePart(it.optBoolean("ok"), it.optLong("ms"), it.str("message")) }
+        ProbeResult(part("search"), part("extract"))
+    }
 
     // --- Historial ---
 

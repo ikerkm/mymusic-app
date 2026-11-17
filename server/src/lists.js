@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { readJson, retire, writeJsonAtomic } from './fsutil.js';
 import { parseKey } from './sources.js';
@@ -25,6 +25,9 @@ export function cleanTrack(input) {
 
 const FILE = /^l_[a-f0-9]{10}\.json$/;
 const ID = /^l_[a-f0-9]{10}$/;
+// Una lista en la papelera: «<id>.json.<AAAAMMDD>T<HHMMSS>» (fsutil.retire), con «-2», «-3»… si coincide el segundo
+const TRASHED = /^((l_[a-f0-9]{10})\.json)\.(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(?:-\d+)?$/;
+const TRASH_TRACKS = 200;      // canciones quitadas que se enseñan como mucho (las más recientes)
 
 // Listas del usuario: un archivo JSON por lista en data/lists/. Una lista guarda datos de canciones,
 // nunca audio, y no repite canción. Lo que se quita va a data/removed/ (papelera), no se borra.
@@ -119,6 +122,76 @@ export class ListStore {
         mkdirSync(removed, { recursive: true });
         appendFileSync(join(removed, 'tracks.jsonl'), JSON.stringify({ removedAt: this.#iso(), listId: list.id, listName: list.name, index, track }) + '\n');
         return this.#save(list);
+    }
+
+    // --- Papelera (Fase 4) ---
+    // Lo quitado sigue en removed/: las listas, como archivo «<id>.json.<fecha>»; las canciones, una
+    // línea por canción en tracks.jsonl. Restaurar no borra nada de ahí: la lista vuelve a su sitio
+    // (se mueve el archivo) y lo restaurado se apunta en restored.jsonl para no volver a enseñarlo.
+    #removedDir() { return join(this.dataDir, 'removed'); }
+
+    #lines(name) {
+        let text;
+        try { text = readFileSync(join(this.#removedDir(), name), 'utf8'); } catch { return []; }
+        return text.split('\n').map((line, index) => {
+            if (!line) return null;
+            try { return { index, value: JSON.parse(line) }; } catch { return null; }
+        }).filter(Boolean);
+    }
+
+    /** Lo recuperable, lo más reciente primero. */
+    trash() {
+        const dir = this.#removedDir();
+        const lists = [];
+        for (const file of existsSync(dir) ? readdirSync(dir) : []) {
+            const match = TRASHED.exec(file);
+            if (!match) continue;
+            const list = readJson(join(dir, file), null);
+            if (!list || !Array.isArray(list.tracks)) continue;
+            const [, , , y, mo, d, h, mi, s] = match;
+            lists.push({ id: file, name: String(list.name ?? 'Lista'), count: list.tracks.length, thumb: list.tracks.find(t => t.thumb)?.thumb ?? null, removedAt: `${y}-${mo}-${d}T${h}:${mi}:${s}.000Z` });
+        }
+        lists.sort((a, b) => b.removedAt.localeCompare(a.removedAt));
+
+        const restored = new Set(this.#lines('restored.jsonl').map(line => line.value.id));
+        const alive = new Map(this.all().map(list => [list.id, list.name]));
+        const tracks = this.#lines('tracks.jsonl')
+            .filter(line => line.value?.track?.key && !restored.has(`t${line.index}`))
+            .map(line => ({
+                id: `t${line.index}`,
+                removedAt: line.value.removedAt ?? null,
+                listId: alive.has(line.value.listId) ? line.value.listId : null,      // null = su lista ya no existe
+                listName: alive.get(line.value.listId) ?? line.value.listName ?? null,
+                track: line.value.track,
+            }))
+            .reverse()
+            .slice(0, TRASH_TRACKS);
+        return { lists, tracks };
+    }
+
+    /** Devuelve una lista de la papelera a su sitio. */
+    restoreList(fileId) {
+        const match = TRASHED.exec(String(fileId));
+        const from = match ? join(this.#removedDir(), match[0]) : null;
+        if (!from || !existsSync(from)) return { error: 'not_found' };
+        const to = this.#path(match[2]);
+        if (existsSync(to)) return { error: 'already_exists' };
+        mkdirSync(this.dir, { recursive: true });
+        renameSync(from, to);
+        return { list: this.get(match[2]) };
+    }
+
+    /** Devuelve una canción quitada a su lista (al final), o a `targetId` si se indica otra. */
+    restoreTrack(lineId, targetId = null) {
+        const line = this.#lines('tracks.jsonl').find(l => `t${l.index}` === lineId);
+        if (!line?.value?.track?.key) return { error: 'not_found' };
+        if (this.#lines('restored.jsonl').some(l => l.value.id === lineId)) return { error: 'not_found' };
+        const listId = targetId ?? line.value.listId;
+        if (!this.get(listId)) return { error: 'list_gone' };
+        const { addedAt, ...track } = line.value.track;      // eslint-disable-line no-unused-vars
+        const { added, list } = this.addTracks(listId, [track]);
+        appendFileSync(join(this.#removedDir(), 'restored.jsonl'), JSON.stringify({ id: lineId, restoredAt: this.#iso(), listId }) + '\n');
+        return { added, list };
     }
 
     moveTrack(id, key, toIndex) {

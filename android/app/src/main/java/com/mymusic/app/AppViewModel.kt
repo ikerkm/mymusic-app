@@ -19,8 +19,12 @@ import com.mymusic.app.data.ListDetail
 import com.mymusic.app.data.ListSummary
 import com.mymusic.app.data.MatchInfo
 import com.mymusic.app.data.Prefs
+import com.mymusic.app.data.ProbeResult
 import com.mymusic.app.data.SessionView
 import com.mymusic.app.data.Track
+import com.mymusic.app.data.Trash
+import com.mymusic.app.data.TrashedList
+import com.mymusic.app.data.TrashedTrack
 import com.mymusic.app.playback.PlayerConnection
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -38,6 +42,7 @@ sealed interface Overlay {
     data object Queue : Overlay
     data object History : Overlay
     data object Settings : Overlay
+    data object Trash : Overlay
     data class ListDetail(val id: String) : Overlay
 }
 
@@ -56,6 +61,14 @@ sealed interface ImportState {
     data class Ready(val preview: ImportPreview) : ImportState       // se enseña qué trae
     data class Adding(val preview: ImportPreview) : ImportState
     data class Failed(val message: String) : ImportState
+}
+
+/** En qué punto está «Probar extracción» (Ajustes). */
+sealed interface ProbeState {
+    data object Idle : ProbeState
+    data object Running : ProbeState
+    data class Done(val result: ProbeResult) : ProbeState
+    data class Failed(val message: String) : ProbeState
 }
 
 /** Canción sobre la que se ha abierto el menú. `listId` solo cuando se abre desde dentro de una lista. */
@@ -123,6 +136,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var notice by mutableStateOf<String?>(null)    // aviso breve en pantalla
 
+    // --- Fase 4: radio, papelera y «Probar extracción» ---
+    var radioOn by mutableStateOf(false)            // la casilla «Radio» del usuario (la recuerda el servidor)
+        private set
+    var radioStarting by mutableStateOf(false)      // «Tu radio» está buscando sus primeras canciones
+        private set
+    var trash by mutableStateOf<Trash?>(null)
+        private set
+    var restoreFor by mutableStateOf<TrashedTrack?>(null)     // canción de la papelera para la que se elige lista
+    var probe by mutableStateOf<ProbeState>(ProbeState.Idle)
+        private set
+
     private var lastKey: String? = null
     private var ticks = 0
     private var sessionRefresh: Job? = null
@@ -183,6 +207,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 delay(wait)
                 val view = runCatching { api.session() }.getOrNull() ?: continue
                 session = view
+                // La radio ha añadido canciones: el reproductor aún no sabe cuál es la siguiente
+                if (view.active && view.next != null && view.current?.track?.key == player.state.value.track?.key && !player.state.value.hasNext) player.apply(view)
                 // Una sola sesión por usuario: si la ha tomado otro dispositivo suyo, este deja de sonar
                 if (!view.active && player.state.value.wantsToPlay) {
                     player.pause()
@@ -244,6 +270,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         importFor = null
         matchFor = null
         matchInfo = null
+        radioOn = false
+        trash = null
+        restoreFor = null
+        probe = ProbeState.Idle
         loginError = message
         loggedIn = false
     }
@@ -256,7 +286,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is Overlay.ListDetail -> loadList(overlay.id)
             Overlay.Queue -> loadQueue()
             Overlay.History -> run { history = api.history(100, distinct = false) }
-            Overlay.Player, Overlay.Settings -> Unit
+            Overlay.Settings, Overlay.Trash -> loadTrash()       // en Ajustes, para decir cuánto hay en la papelera
+            Overlay.Player -> Unit
         }
     }
 
@@ -271,6 +302,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         lists = api.lists()
         session = api.session()
         recent = api.history(6, distinct = true)
+        // Un servidor anterior a la radio no conoce esta dirección: la casilla se queda sin marcar
+        runCatching { api.radio() }.onSuccess { radioOn = it }
     }
 
     // ------------------------------------------------------------------ actualización de la app
@@ -370,6 +403,92 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         run("No se pudo continuar.") { api.claim()?.let(::start) }
     }
 
+    // ------------------------------------------------------------------ radio (Fase 4)
+
+    /** Marca o desmarca la casilla «Radio»: al acabarse lo que suena, seguir con canciones parecidas. */
+    fun setRadio(enabled: Boolean) {
+        val before = radioOn
+        radioOn = enabled
+        viewModelScope.launch {
+            try {
+                radioOn = api.setRadio(enabled)
+                if (radioOn) {
+                    // Si ya se estaba al final de la lista, el servidor añade la tanda enseguida
+                    delay(3_500)
+                    player.state.value.track?.key?.let(::refreshSessionSoon)
+                }
+            } catch (e: Exception) {
+                radioOn = before
+                if (e is ApiException && e.status == 401) logout(EXPIRED) else notice = "No se pudo cambiar la radio."
+            }
+        }
+    }
+
+    /** «Tu radio» (Inicio): una sesión de canciones parecidas a lo que el usuario escucha. */
+    fun playHomeRadio() {
+        if (radioStarting) return
+        radioStarting = true
+        viewModelScope.launch {
+            try {
+                start(api.startHomeRadio())
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED) else notice = when (e.error) {
+                    "no_seeds" -> "Todavía no hay de dónde partir: escucha algo o crea una lista."
+                    "radio_empty" -> "No han salido canciones nuevas. Prueba más tarde."
+                    else -> "No se pudo empezar la radio. Prueba otra vez."
+                }
+            } catch (e: Exception) {
+                notice = "Sin conexión con el servidor."
+            } finally {
+                radioStarting = false
+            }
+        }
+    }
+
+    /** Guardar una canción que puso la radio: si se escucha una lista, va directa a ella; si no, se elige a cuál. */
+    fun keepRadioTrack(track: Track) {
+        val view = session
+        val listId = view?.sourceId
+        if (view?.sourceType == "list" && listId != null) addToList(ListSummary(listId, view.sourceName, 0, 0, null), track) else pickFor = track
+    }
+
+    // ------------------------------------------------------------------ papelera y «Probar extracción» (Fase 4)
+
+    fun loadTrash() = run("No se pudo leer la papelera.") { trash = api.trash() }
+
+    fun restoreList(item: TrashedList) = run("No se pudo restaurar.") {
+        val list = api.restoreTrashed("list", item.id)
+        notice = "Lista «${list.name}» restaurada"
+        trash = api.trash()
+        lists = api.lists()
+    }
+
+    /** Devuelve una canción a su lista; con `listId`, a otra (cuando la suya ya no existe). */
+    fun restoreTrack(item: TrashedTrack, listId: String? = null) = run("No se pudo restaurar.") {
+        restoreFor = null
+        val list = api.restoreTrashed("track", item.id, listId)
+        notice = "Devuelta a «${list.name}»"
+        trash = api.trash()
+        lists = api.lists()
+        if (openList?.summary?.id == list.id) openList = api.list(list.id)
+    }
+
+    /** Pide al servidor que compruebe que el buscador responde y que YouTube entrega audio. */
+    fun probeExtraction() {
+        if (probe is ProbeState.Running) return
+        probe = ProbeState.Running
+        viewModelScope.launch {
+            probe = try {
+                ProbeState.Done(api.probe())
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED)
+                ProbeState.Failed(if (e.error == "busy") "Ya hay una prueba en marcha." else "El servidor no ha podido hacer la prueba (${e.status}).")
+            } catch (e: Exception) {
+                ProbeState.Failed("Sin conexión con el servidor.")
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ cuenta
 
     /** Cambia la contraseña del usuario. `done` recibe null si salió bien, o el mensaje de error. */
@@ -450,6 +569,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         notice = if (added) "Añadida a «${list.name}»" else "Ya estaba en «${list.name}»"
         lists = api.lists()
         if (openList?.summary?.id == list.id) openList = api.list(list.id)
+        // Guardada, deja de ser «de la radio»: la sesión y la cola lo reflejan
+        if (track.radio) {
+            if (overlays.lastOrNull() == Overlay.Queue) loadQueue() else runCatching { api.session() }.getOrNull()?.let { session = it }
+        }
     }
 
     /** A la papelera del servidor (no se borra). */

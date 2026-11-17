@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { ListStore } from './lists.js';
+import { RadioMemory } from './radio.js';
 import { HistoryStore, SessionStore } from './session.js';
 
 // Lo de cada usuario vive en su carpeta, data/users/<id>/: sus listas, su sesión de escucha, su
@@ -21,13 +22,18 @@ export class UserStores {
         return join(this.dataDir, 'users', userId);
     }
 
-    /** Almacenes de un usuario: { lists, sessions, history }. */
+    /** Almacenes de un usuario: { lists, sessions, history, radio }. */
     for(userId) {
         let stores = this.cache.get(userId);
         if (!stores) {
             const dir = this.dir(userId);
             mkdirSync(dir, { recursive: true });
-            stores = { lists: new ListStore(dir, { now: this.now }), sessions: new SessionStore(dir, { now: this.now }), history: new HistoryStore(dir, { now: this.now }) };
+            stores = {
+                lists: new ListStore(dir, { now: this.now }),
+                sessions: new SessionStore(dir, { now: this.now }),
+                history: new HistoryStore(dir, { now: this.now }),
+                radio: new RadioMemory(dir, { now: this.now }),
+            };
             this.cache.set(userId, stores);
         }
         return stores;

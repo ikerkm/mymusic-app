@@ -78,6 +78,9 @@ fun HomeScreen(vm: AppViewModel, state: PlayerState) {
             }
         }
 
+        // «Tu radio»: canciones parecidas a lo que escucha (hace falta haber escuchado algo o tener una lista)
+        if (vm.lists.isNotEmpty() || vm.recent.isNotEmpty()) item { RadioCard(vm) }
+
         if (vm.lists.isNotEmpty()) {
             item { SectionLabel("Tus listas") }
             items(vm.lists.take(4).chunked(2)) { pair ->

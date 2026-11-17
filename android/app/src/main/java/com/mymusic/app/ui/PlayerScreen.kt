@@ -62,6 +62,8 @@ fun PlayerScreen(vm: AppViewModel, state: PlayerState) {
     val track = state.track ?: return
     // La sesión del servidor, si habla de la canción que suena (puede ir un instante por detrás al cambiar)
     val session = vm.session?.takeIf { it.current?.track?.key == track.key }
+    // La canción que suena, si la puso la radio y aún no está guardada en una lista
+    val fromRadio = session?.current?.track?.takeIf { it.radio }
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs.coerceAtLeast(1)
     val fraction = dragging ?: (state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
@@ -99,10 +101,12 @@ fun PlayerScreen(vm: AppViewModel, state: PlayerState) {
                     Text(track.artist.orEmpty(), color = Mm.Mut, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     Spacer(Modifier.width(6.dp))
                     PlatformBadge(track.platform)
+                    if (fromRadio != null) Text(" · Radio", color = Mm.Acc, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
             }
             Spacer(Modifier.width(6.dp))
-            Control(MmIcons.ListAdd, "Añadir a una lista", "playerAddToList") { vm.pickFor = track }
+            // Una canción que puso la radio se guarda de un toque en la lista que suena; las demás, eligiendo lista
+            Control(MmIcons.ListAdd, "Añadir a una lista", "playerAddToList") { if (fromRadio != null) vm.keepRadioTrack(fromRadio) else vm.pickFor = track }
         }
 
         if (state.error != null) {
@@ -166,6 +170,8 @@ fun PlayerScreen(vm: AppViewModel, state: PlayerState) {
                 Spacer(Modifier.width(6.dp))
                 Text("Cola", color = Mm.Tx, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
+            Spacer(Modifier.width(8.dp))
+            RadioCheck(vm)
             Spacer(Modifier.weight(1f))
             val status = when {
                 state.isLoading && state.error == null && state.positionMs == 0L -> "Preparando la canción…"

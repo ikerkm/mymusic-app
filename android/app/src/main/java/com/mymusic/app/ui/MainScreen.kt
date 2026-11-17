@@ -72,6 +72,7 @@ fun MainScreen(vm: AppViewModel) {
                         is Overlay.ListDetail -> ListDetailScreen(vm, top.id, state)
                         Overlay.History -> HistoryScreen(vm, state)
                         Overlay.Settings -> SettingsScreen(vm)
+                        Overlay.Trash -> TrashScreen(vm)
                         else -> when (tab) {
                             Tab.Home -> HomeScreen(vm, state)
                             Tab.Search -> SearchScreen(vm, playingKey = state.track?.key)
@@ -108,6 +109,7 @@ fun MainScreen(vm: AppViewModel) {
         vm.pickFor?.let { ListPickerSheet(vm, it) }
         vm.importFor?.let { ImportSheet(vm, it) }
         vm.matchFor?.let { MatchSheet(vm, it) }
+        vm.restoreFor?.let { RestorePicker(vm, it) }
         Notice(vm, Modifier.align(Alignment.BottomCenter))
     }
 }

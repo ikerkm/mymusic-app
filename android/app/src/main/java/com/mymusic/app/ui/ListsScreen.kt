@@ -219,6 +219,8 @@ fun ListDetailScreen(vm: AppViewModel, id: String, state: PlayerState) {
                         Spacer(Modifier.width(6.dp))
                         Text("Importar", color = Mm.Tx, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     }
+                    // Radio: al acabarse la lista, seguir con canciones parecidas que no estén en ella
+                    RadioCheck(vm)
                 }
             }
 

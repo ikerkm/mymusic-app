@@ -336,3 +336,26 @@ html:not(.m) .only-m{display:none !important}
 .m .opt.danger .ic{color:inherit}
 .m .sheet hr{border:0;border-top:1px solid var(--line);margin:4px 0}
 .m .toast{bottom:calc(140px + env(safe-area-inset-bottom));width:max-content;max-width:92%;text-align:center}
+
+/* ====================================================================================
+   Fase 4: radio (casilla, marca y «+» de las canciones que pone), «Tu radio» en Inicio,
+   papelera y «Probar extracción» en Ajustes.
+   ==================================================================================== */
+.check{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 4px;font-weight:600;font-size:13px;color:var(--mut);cursor:pointer;white-space:nowrap;user-select:none;flex:none}
+.check input{width:16px;height:16px;margin:0;accent-color:var(--acc);cursor:pointer}
+.check:has(input:checked){color:var(--tx)}
+.qrow .add,.now .keep{color:var(--acc);flex:none}
+.radtile{width:44px;height:44px;border-radius:10px;background:var(--sur2);color:var(--acc);display:flex;align-items:center;justify-content:center;flex:none}
+.banner.radio{border-color:var(--line)}
+.banner + .banner{margin-top:10px}
+.radnote{margin-top:10px}
+.sub{display:block;color:var(--mut);font-size:12px;font-weight:400}
+.rowline > div{min-width:0}
+.probe p{font-size:13px;margin:8px 0 0}
+.probe .ok{color:var(--ok)}
+.pick .btn{flex:none}
+div.pick{cursor:default}
+.m .check{height:38px;font-size:14px;gap:8px}
+.m .check input{width:20px;height:20px}
+.m .banner .radtile{width:52px;height:52px}
+.m .drawer .head .check{margin-right:4px}

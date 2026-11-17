@@ -93,6 +93,11 @@ class PlaybackService : MediaSessionService() {
                 if (!isPlaying) report(player)
             }
 
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                // Se acabó lo que había: con la radio, el servidor puede estar añadiendo la siguiente
+                if (playbackState == Player.STATE_ENDED) awaitNext(player)
+            }
+
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 // Se pulsa reproducir (app, notificación, auriculares): si la sesión la llevaba otro dispositivo, vuelve aquí
                 if (playWhenReady) reclaim(player)
@@ -103,7 +108,11 @@ class PlaybackService : MediaSessionService() {
         scope.launch {
             while (isActive) {
                 delay(20_000)
-                if (player.isPlaying) report(player)
+                if (player.isPlaying) {
+                    report(player)
+                    // La radio añade canciones por su cuenta: si aquí no hay siguiente, se pregunta si ya la hay
+                    if (!player.hasNextMediaItem() && player.repeatMode == Player.REPEAT_MODE_OFF) refreshWindow(player)
+                }
             }
         }
 
@@ -143,6 +152,46 @@ class PlaybackService : MediaSessionService() {
                     if (player.currentMediaItem?.mediaId != key) return@withLock     // ya suena otra: este aviso sobra
                     delay(3_000L * attempt)
                 }
+            }
+        }
+    }
+
+    private fun item(track: Track): MediaItem = Playlist.item(track, prefs.serverUrl.orEmpty())
+
+    /** Si el servidor ya tiene canción siguiente y el reproductor no (la radio acaba de añadirla), se coloca. */
+    private fun refreshWindow(player: Player) {
+        scope.launch {
+            advancing.withLock {
+                val key = player.currentMediaItem?.mediaId ?: return@withLock
+                val view = runCatching { api.session() }.getOrNull() ?: return@withLock
+                if (view.active && view.current?.track?.key == key && view.next != null) Playlist.reconcile(player, view, ::item)
+            }
+        }
+    }
+
+    /**
+     * La última canción ha terminado. Con la radio encendida el servidor añade más: se le pregunta y, mientras
+     * diga que las está buscando, se espera (hasta un minuto). Si aparece la siguiente, se sigue con ella.
+     */
+    private fun awaitNext(player: Player) {
+        scope.launch {
+            repeat(20) {
+                val key = player.currentMediaItem?.mediaId ?: return@launch
+                if (player.playbackState != Player.STATE_ENDED || !player.playWhenReady) return@launch
+                val view = runCatching { api.session() }.getOrNull()
+                if (view != null) {
+                    if (!view.active || view.current?.track?.key != key) return@launch
+                    if (view.next != null) {
+                        advancing.withLock { Playlist.reconcile(player, view, ::item) }
+                        if (player.hasNextMediaItem() && player.playbackState == Player.STATE_ENDED) {
+                            player.seekToNextMediaItem()
+                            player.play()
+                        }
+                        return@launch
+                    }
+                    if (view.radioStatus != "loading") return@launch
+                }
+                delay(3_000)
             }
         }
     }

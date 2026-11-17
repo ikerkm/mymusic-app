@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mymusic.app.AppViewModel
 import com.mymusic.app.SheetTarget
+import com.mymusic.app.data.Track
 import com.mymusic.app.playback.PlayerState
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -71,14 +72,27 @@ fun QueueScreen(vm: AppViewModel) {
                 Icon(MmIcons.Down, contentDescription = "Cerrar", tint = Mm.Tx, modifier = Modifier.size(24.dp))
             }
             Text("Cola", color = Mm.Tx, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(40.dp))
+            RadioCheck(vm)
+        }
+
+        // Lo que puso la radio lleva su marca y un «+» para guardarlo (en la lista que suena, si suena una)
+        val keep: @Composable (Track) -> Unit = { track ->
+            Box(Modifier.size(40.dp).clickable { vm.keepRadioTrack(track) }.testTag("keepRadio"), contentAlignment = Alignment.Center) {
+                Icon(MmIcons.Plus, contentDescription = "Añadir a la lista", tint = Mm.Acc, modifier = Modifier.size(20.dp))
+            }
         }
 
         val now = vm.queue.firstOrNull()
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             item(key = "t-sonando") { SectionLabel("Sonando") }
             if (now != null) {
-                item(key = "sonando") { TrackRow(now.track, playing = true, onClick = { vm.back() }) }
+                item(key = "sonando") {
+                    TrackRow(
+                        now.track, playing = true, onClick = { vm.back() },
+                        note = if (now.track.radio) "Radio" else null,
+                        trailing = if (now.track.radio) ({ keep(now.track) }) else null,
+                    )
+                }
             }
             item(key = "t-despues") {
                 SectionLabel(listOfNotNull("A continuación", vm.session?.sourceName?.takeIf { it.isNotBlank() }).joinToString(" · "))
@@ -107,7 +121,9 @@ fun QueueScreen(vm: AppViewModel) {
                             playing = false,
                             onClick = {},
                             modifier = Modifier.background(if (dragging) Mm.Sur2 else Mm.Bg),
+                            note = if (entry.track.radio) "Radio" else null,
                             trailing = {
+                                if (entry.track.radio) keep(entry.track)
                                 Box(
                                     Modifier.size(40.dp).draggableHandle(
                                         onDragStarted = { dragged = entry.track.key },
@@ -127,6 +143,18 @@ fun QueueScreen(vm: AppViewModel) {
                             },
                         )
                     }
+                }
+            }
+            val session = vm.session
+            if (session != null && session.repeat == "off" && (vm.radioOn || session.sourceType == "radio")) {
+                item(key = "radio") {
+                    val text = when (session.radioStatus) {
+                        "loading" -> "Radio: buscando canciones parecidas…"
+                        "error" -> "Radio: YouTube no ha respondido. Se volverá a intentar."
+                        "empty" -> "Radio: no han salido canciones nuevas."
+                        else -> "Radio: al acabarse, seguirá con canciones parecidas."
+                    }
+                    Text(text, color = Mm.Mut, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp).testTag("radioNote"))
                 }
             }
             item(key = "fin") { Spacer(Modifier.height(16.dp)) }

@@ -22,7 +22,7 @@ export function fakeAudio(length) {
  * @param {number|null} o.filesize  tamaño que «anuncia» (null = no lo anuncia)
  * @param {number} o.cutAt          si se da, el proceso «muere» tras mandar esos bytes
  */
-export function fakeOpen(bytes, { chunk = 1000, delayMs = 1, filesize = bytes.length, cutAt = null, stderr = '', failFirst = 0 } = {}) {
+export function fakeOpen(bytes, { chunk = 1000, delayMs = 1, filesize = bytes.length, cutAt = null, stderr = '', failFirst = 0, hang = false } = {}) {
     const calls = [];
     const options = [];
     const open = (url, opts) => {
@@ -38,6 +38,7 @@ export function fakeOpen(bytes, { chunk = 1000, delayMs = 1, filesize = bytes.le
         stdout.on('end', () => resolveDone({ code: cutAt === null && !failing ? 0 : 1, stderr: failing && !stderr ? 'ERROR: rechazo pasajero' : stderr }));
         stdout.on('close', () => resolveDone({ code: 1, stderr }));
         (async () => {
+            if (hang) return;       // un yt-dlp colgado: ni da audio ni termina, hasta que lo matan
             for (let i = 0; i < limit && !killed; i += chunk) {
                 stdout.write(bytes.subarray(i, Math.min(i + chunk, limit)));
                 await sleep(delayMs);
@@ -60,7 +61,7 @@ export const PASSWORD = 'una-clave-de-prueba';
 export const OWNER = 'duena';
 
 // Servidor de prueba en un puerto libre, con yt-dlp y el buscador sustituidos por dobles
-export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers, webDir } = {}) {
+export async function startServer({ bytes = fakeAudio(40_000), openOptions = {}, cacheOptions = {}, password = PASSWORD, search, prefetchDelayMs = 20, matchSearch, importers, webDir, fetchMix, probeTimeoutMs, radioTimeoutMs } = {}) {
     const [{ createApp }, { Auth }, { AudioCache }, { UserStores }] = await Promise.all([
         import('../src/app.js'), import('../src/auth.js'), import('../src/audio.js'), import('../src/stores.js'),
     ]);
@@ -75,11 +76,13 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
     const { AppDist } = await import('../src/appdist.js');
     const { MatchStore } = await import('../src/matches.js');
     const { PendingImports } = await import('../src/importers.js');
+    const { Radio } = await import('../src/radio.js');
     // Buscador de coincidencias y lectores de listas de fuera: dobles, sin red
     const matches = new MatchStore(dir, { search: matchSearch ?? (async () => []) });
     const app = createApp({
         auth, cache, open, stores, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
         matches, importers: importers ?? {}, pending: new PendingImports(), webDir,
+        radio: fetchMix ? new Radio({ fetchMix, mixTimeoutMs: radioTimeoutMs ?? 2000 }) : null, ...(probeTimeoutMs ? { probeTimeoutMs } : {}),
         search: search ?? (async q => [{ key: 'yt:dQw4w9WgXcQ', title: `resultado de ${q}` }]),
     });
     const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });

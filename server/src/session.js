@@ -161,8 +161,9 @@ export class SessionStore {
         if (typeof shuffle === 'boolean' && shuffle !== this.session.shuffle) {
             const current = this.currentKey;
             if (shuffle) {
-                // La que suena se queda; el resto se baraja detrás
-                this.session.order = [current, ...this.#shuffled(this.session.base.filter(key => key !== current))];
+                // La que suena se queda; el resto se baraja detrás. Lo que puso la radio sigue al final, en su orden.
+                const rest = this.session.base.filter(key => key !== current);
+                this.session.order = [current, ...this.#shuffled(rest.filter(key => !this.#pendingRadio(key))), ...rest.filter(key => this.#pendingRadio(key))];
                 this.state.index = 0;
             } else {
                 // Vuelve el orden natural, situados en la canción que suena
@@ -195,8 +196,14 @@ export class SessionStore {
         const without = list => list.filter(key => key !== track.key);
         const place = list => {
             const clean = without(list);
-            if (mode === 'next') clean.splice(clean.indexOf(current) + 1, 0, track.key);
-            else clean.push(track.key);
+            if (mode === 'next') {
+                clean.splice(clean.indexOf(current) + 1, 0, track.key);
+            } else {
+                // Al final de lo que ha pedido el usuario: por delante de lo que la radio tenga puesto después
+                const from = clean.indexOf(current) + 1;
+                const radioAt = clean.findIndex((key, i) => i >= from && this.#pendingRadio(key));
+                clean.splice(radioAt < 0 ? clean.length : radioAt, 0, track.key);
+            }
             return clean;
         };
         this.session.tracks[track.key] ??= track;
@@ -206,6 +213,48 @@ export class SessionStore {
         this.#saveSession();
         this.#saveState();
         return this.view();
+    }
+
+    // --- Radio (Fase 4) ---
+    // Canción puesta por la radio que el usuario no ha guardado en una lista
+    #pendingRadio(key) {
+        const track = this.session.tracks[key];
+        return Boolean(track?.radio && !track.saved);
+    }
+
+    /** Cuántas canciones quedan por detrás de la que suena. */
+    get remaining() { return this.session ? this.count - 1 - this.state.index : 0; }
+
+    /** Añade al final una tanda de la radio (canciones con `radio: true`). Devuelve cuántas han entrado. */
+    appendRadio(tracks) {
+        if (!this.session) return 0;
+        const keys = [];
+        for (const track of tracks) {
+            if (!track?.key || this.session.tracks[track.key]) continue;
+            this.session.tracks[track.key] = { ...track, radio: true };
+            keys.push(track.key);
+        }
+        if (keys.length) {
+            // Listas nuevas: sin aleatorio, `order` y `base` son el mismo array y un push doble las duplicaría
+            this.session.order = [...this.session.order, ...keys];
+            this.session.base = this.session.shuffle ? [...this.session.base, ...keys] : [...this.session.order];
+            this.#saveSession();
+        }
+        return keys.length;
+    }
+
+    /** El usuario ha guardado en una lista una canción que puso la radio: deja de ser «de la radio» a todos los efectos. */
+    markSaved(key) {
+        const track = this.session?.tracks[key];
+        if (!track?.radio || track.saved) return false;
+        track.saved = true;
+        this.#saveSession();
+        return true;
+    }
+
+    /** Canciones de la sesión, en orden. */
+    allTracks() {
+        return this.session ? this.session.order.map(key => this.session.tracks[key]) : [];
     }
 
     // Reordenar lo que viene después de la canción actual

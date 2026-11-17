@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.sp
 import com.mymusic.app.AppViewModel
 import com.mymusic.app.BuildConfig
 import com.mymusic.app.Overlay
+import com.mymusic.app.ProbeState
+import com.mymusic.app.data.ProbePart
 
 @Composable
 private fun Group(content: @Composable () -> Unit) {
@@ -59,10 +61,17 @@ private fun Line(title: String, detail: String? = null, tag: String = "", danger
     }
 }
 
+/** Una línea del resultado de «Probar extracción»: «YouTube: responde (2,1 s)». */
+@Composable
+private fun ProbeLine(name: String, part: ProbePart) {
+    val seconds = "%.1f".format(java.util.Locale.US, part.ms / 1000.0).replace('.', ',')
+    val text = "$name: ${if (part.ok) "responde" else "no responde"} ($seconds s)" + if (!part.ok && part.message != null) " — ${part.message}" else ""
+    Text(text, color = if (part.ok) Mm.Ok else Mm.Yt, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp).testTag("probeResult"))
+}
+
 /**
- * Pantalla 11 de la maqueta (Ajustes), en lo que ya existe: servidor, historial y la cuenta.
- * «Probar extracción» y «Papelera» llegan en la Fase 4. «Cambiar contraseña» es nuevo respecto a la
- * maqueta: hace falta desde que hay varios usuarios.
+ * Pantalla 11 de la maqueta (Ajustes): servidor y «Probar extracción», historial y papelera, y la cuenta.
+ * «Cambiar contraseña» es nuevo respecto a la maqueta: hace falta desde que hay varios usuarios.
  */
 @Composable
 fun SettingsScreen(vm: AppViewModel) {
@@ -76,10 +85,34 @@ fun SettingsScreen(vm: AppViewModel) {
         }
 
         SectionLabel("Servidor")
-        Group { Line(vm.savedServer.removePrefix("https://").removePrefix("http://"), "Conectado") }
+        Group {
+            Line(vm.savedServer.removePrefix("https://").removePrefix("http://"), "Conectado")
+            HorizontalDivider(color = Mm.Line)
+            val probe = vm.probe
+            Line("Probar extracción", if (probe is ProbeState.Running) "Probando…" else "Comprueba que YouTube responde", tag = "probe", arrow = probe !is ProbeState.Running) { vm.probeExtraction() }
+            when (probe) {
+                is ProbeState.Done -> {
+                    ProbeLine("Buscador", probe.result.search)
+                    ProbeLine("YouTube", probe.result.extract)
+                }
+                is ProbeState.Failed -> Text(probe.message, color = Mm.Yt, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp).testTag("probeResult"))
+                else -> Unit
+            }
+        }
 
         SectionLabel("Tus datos")
-        Group { Line("Historial", tag = "settingsHistory", arrow = true) { vm.open(Overlay.History) } }
+        Group {
+            Line("Historial", tag = "settingsHistory", arrow = true) { vm.open(Overlay.History) }
+            HorizontalDivider(color = Mm.Line)
+            val inTrash = vm.trash?.size
+            val detail = when (inTrash) {
+                null -> "Lo que has quitado, por si quieres recuperarlo"
+                0 -> "Vacía"
+                1 -> "1 elemento recuperable"
+                else -> "$inTrash elementos recuperables"
+            }
+            Line("Papelera", detail, tag = "settingsTrash", arrow = true) { vm.open(Overlay.Trash) }
+        }
 
         SectionLabel("Cuenta")
         Group {

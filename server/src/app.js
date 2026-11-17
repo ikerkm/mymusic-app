@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { sniffMime } from './audio.js';
 import { sessionCookie } from './auth.js';
 import { ListStore, cleanTrack } from './lists.js';
+import { RADIO_SEEDS, SongSet } from './radio.js';
 import { parseKey, parseLink } from './sources.js';
 import { explain } from './ytdlp.js';
 
@@ -33,6 +34,9 @@ const WEB_CSP = "default-src 'self'; img-src 'self' https: data:; media-src 'sel
 const LINKS_PER_CALL = 100;
 const LINKS_AT_ONCE = 4;
 
+// Vídeo con el que se prueba la extracción: «Me at the zoo», el primero de YouTube (19 segundos, ahí desde 2005)
+const PROBE_VIDEO = 'jNQXAC9IVRw';
+
 const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.remoteAddress ?? 'desconocida');
 
 /**
@@ -42,7 +46,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, webDir = null, prefetchDelayMs = 8000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -291,6 +295,8 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         const track = trackFrom(req.body?.track);
         if (!track) return res.status(400).json({ error: 'bad_track' });
         const { added, list } = req.ctx.lists.addTracks(req.params.id, [track]);
+        // Si era una canción que puso la radio, al guardarla deja de ser «de la radio»
+        req.ctx.sessions.markSaved(track.key);
         res.json({ added, list: ListStore.summary(list) });
     });
 
@@ -331,6 +337,111 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         prefetchTimers.set(userId, timer);
     }
 
+    // --- Radio (Fase 4): seguir con canciones parecidas cuando se acaba lo que suena ---
+    // Con la opción «Radio» marcada (o en una sesión de «Tu radio»), cuando queda como mucho una
+    // canción por detrás de la que suena se añade una tanda. De dónde salen las parecidas:
+    //   · sesión de una lista → de canciones de esa lista, y nunca canciones que ya estén en ella;
+    //   · «Tu radio» (Inicio) → de lo que el usuario ha elegido últimamente y de sus listas;
+    //   · canción suelta o búsqueda → de lo que el usuario ha puesto en esa sesión.
+    const RADIO_RETRY_MS = 30_000;
+    const radioRuns = new Map();             // por usuario: { busy, status, sessionId, count, at }
+    const radioState = userId => {
+        const { radio: memory, sessions } = stores.for(userId);
+        const run = radioRuns.get(userId);
+        return { enabled: memory.enabled, status: run && sessions.view()?.id === run.sessionId ? run.status : 'idle' };
+    };
+
+    // Claves de YouTube de las que puede partir la radio. Las canciones de SoundCloud no valen
+    // (no tienen mezcla); las de Spotify valen por su coincidencia.
+    async function seedKeysOf(tracks) {
+        const keys = tracks.map(track => audioKeyOf(track.key)).filter(key => key?.startsWith('yt:'));
+        if (keys.length >= RADIO_SEEDS) return keys;
+        // Lista de Spotify que aún no ha sonado: se busca la coincidencia de unas pocas, que hacen de semilla
+        const unknown = tracks.filter(track => track.key.startsWith('sp:') && !audioKeyOf(track.key)).sort(() => Math.random() - 0.5);
+        for (const track of unknown.slice(0, RADIO_SEEDS - keys.length)) {
+            const source = await resolveAudio(track.key).catch(() => null);
+            if (source?.key.startsWith('yt:')) keys.push(source.key);
+        }
+        return keys;
+    }
+
+    /** Una tanda para el usuario. `home` = para empezar «Tu radio»; si no, para seguir la sesión abierta. */
+    async function radioBatch(ctx, { home = false } = {}) {
+        const { sessions, lists, history, radio: memory } = ctx;
+        const exclude = new SongSet();
+        const known = track => {
+            exclude.add(track);
+            exclude.addKey(audioKeyOf(track.key));
+        };
+        const inSession = sessions.allTracks();
+        inSession.forEach(known);
+        const source = home ? { type: 'radio' } : sessions.view()?.source;
+        const list = source?.type === 'list' ? lists.get(source.id) : null;
+        let scope;
+        let seedTracks;
+        if (list) {
+            scope = `list:${list.id}`;
+            seedTracks = list.tracks;
+            list.tracks.forEach(known);
+        } else if (source?.type === 'radio') {
+            scope = 'home';
+            const seen = new Set();
+            seedTracks = [];
+            const take = track => {
+                known(track);
+                if (!seen.has(track.key)) {
+                    seen.add(track.key);
+                    seedTracks.push(track);
+                }
+            };
+            // Lo último que ha elegido él (no lo que le puso la radio) y todo lo que tiene en sus listas
+            for (const entry of history.recent(300)) {
+                if (seen.size >= 60) break;
+                if (entry.track?.key && !(entry.track.radio && !entry.track.saved)) take(entry.track);
+            }
+            for (const summary of lists.all()) (lists.get(summary.id)?.tracks ?? []).forEach(take);
+        } else {
+            scope = 'loose';
+            seedTracks = inSession.filter(track => !track.radio || track.saved);
+        }
+        const seedKeys = await seedKeysOf(seedTracks);
+        const fallbackKeys = home ? [] : inSession.filter(track => track.radio && !track.saved).map(track => track.key);
+        const { tracks } = await radio.batch({ scope, seedKeys, fallbackKeys, exclude, memory });
+        return { tracks, seeds: seedKeys.length, scope };
+    }
+
+    function maybeRadio(userId) {
+        if (!radio) return;
+        const ctx = stores.for(userId);
+        const { sessions } = ctx;
+        const view = sessions.view();
+        if (!view || !(ctx.radio.enabled || view.source?.type === 'radio')) return;
+        if (view.repeat !== 'off' || sessions.remaining > 1) return;
+        const last = radioRuns.get(userId);
+        if (last?.busy) return;
+        // Si el último intento para este mismo punto no dio nada, se espera antes de volver a probar
+        if (last && last.sessionId === view.id && last.count === view.count && last.status !== 'idle' && Date.now() - last.at < RADIO_RETRY_MS) return;
+        const run = { busy: true, status: 'loading', sessionId: view.id, count: view.count, at: Date.now() };
+        radioRuns.set(userId, run);
+        radioBatch(ctx).then(({ tracks, scope }) => {
+            run.busy = false;
+            run.at = Date.now();
+            if (sessions.view()?.id !== run.sessionId) {       // la sesión cambió mientras se buscaba
+                run.status = 'idle';
+                return;
+            }
+            const added = sessions.appendRadio(tracks);
+            run.status = added ? 'idle' : 'empty';
+            log(`[radio] ${scope}: ${added ? `${added} canciones añadidas` : 'no ha salido ninguna canción nueva'}`);
+            if (added) syncAudio(userId);
+        }).catch(error => {
+            run.busy = false;
+            run.at = Date.now();
+            run.status = 'error';
+            log(`[radio] error: ${String(error?.message ?? error).slice(0, 200)}`);
+        });
+    }
+
     // Una sesión por usuario, compartida entre sus dispositivos (D35), pero solo uno la lleva a la
     // vez: el último que empezó a reproducir o pidió continuar. `active` le dice a cada dispositivo
     // si es él; a los demás, avanzar o informar de su posición se les rechaza (409).
@@ -339,6 +450,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         ...view,
         device: undefined,
         active: !view.device || view.device === req.device.id,
+        radio: radioState(req.user.id),
         // Si la lleva otro dispositivo del usuario, cuál («estaba sonando en tu Pocophone»)
         deviceName: view.device && view.device !== req.device.id ? auth.deviceName(req.user.id, view.device) : null,
         window: { prev: entryShown(view.window.prev), current: entryShown(view.window.current), next: entryShown(view.window.next) },
@@ -356,13 +468,31 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
     const reply = (req, res, view, error = 'no_session') => {
         if (!view) return res.status(req.ctx.sessions.active ? 400 : 404).json({ error: req.ctx.sessions.active ? error : 'no_session' });
         syncAudio(req.user.id);
+        maybeRadio(req.user.id);
         res.json({ session: viewShown(req, view) });
     };
 
     priv.get('/session', (req, res) => res.json({ session: viewShown(req, req.ctx.sessions.view()) }));
 
-    priv.post('/session', (req, res) => {
+    priv.post('/session', async (req, res) => {
         const body = req.body ?? {};
+        // «Tu radio» (Inicio): una sesión hecha solo de canciones parecidas a lo que escucha
+        if (body.radio === 'home') {
+            if (!radio) return res.status(404).json({ error: 'not_found' });
+            // Hasta tres intentos seguidos: una mezcla lenta sigue leyéndose por detrás y el siguiente la encuentra hecha
+            let first = null;
+            for (let attempt = 1; attempt <= 3 && !first; attempt++) {
+                try {
+                    first = await radioBatch(req.ctx, { home: true });
+                } catch (error) {
+                    log(`[radio] «Tu radio», intento ${attempt}: ${String(error?.message ?? error).slice(0, 200)}`);
+                }
+            }
+            if (!first) return res.status(502).json({ error: 'radio_failed' });
+            if (first.tracks.length === 0) return res.status(422).json({ error: first.seeds ? 'radio_empty' : 'no_seeds' });
+            log(`[radio] «Tu radio» de ${req.user.name}: empieza con ${first.tracks.length} canciones`);
+            return reply(req, res, req.ctx.sessions.start({ source: { type: 'radio', name: 'Tu radio' }, tracks: first.tracks, device: req.device.id }));
+        }
         if (body.listId !== undefined) {
             const list = req.ctx.lists.get(body.listId);
             if (!list) return res.status(404).json({ error: 'list_not_found' });
@@ -400,7 +530,9 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         if (otherDevice(req)) return res.status(409).json({ error: 'other_device' });
         const result = req.ctx.sessions.report({ index: indexFrom(req), positionMs: Number(req.body?.positionMs) });
         if (result?.played) req.ctx.history.append(result.played);
-        res.json({ ok: Boolean(result) });
+        // `count` avisa al cliente de que la sesión ha crecido (la radio añadió canciones) y debe volver a pedirla
+        maybeRadio(req.user.id);
+        res.json({ ok: Boolean(result), count: req.ctx.sessions.count, radio: radioState(req.user.id).status });
     });
 
     priv.get('/session/queue', (req, res) => {
@@ -432,6 +564,15 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         if (index === null) return reply(req, res, req.ctx.sessions.view());
         log(`[sesion] quitar de la cola: ${req.params.ref}`);
         reply(req, res, req.ctx.sessions.removeQueued(index), 'bad_index');
+    });
+
+    // La opción «Radio» es del usuario, no de la sesión: se recuerda de una sesión a otra
+    priv.get('/radio', (req, res) => res.json({ radio: radioState(req.user.id) }));
+    priv.put('/radio', (req, res) => {
+        if (typeof req.body?.enabled !== 'boolean') return res.status(400).json({ error: 'bad_request' });
+        req.ctx.radio.setEnabled(req.body.enabled);
+        maybeRadio(req.user.id);
+        res.json({ radio: radioState(req.user.id) });
     });
 
     // --- Historial ---
@@ -580,6 +721,62 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         log(`[coincidencia] ${req.params.key} → ${chosen.key}, elegida a mano`);
         syncPins();
         res.json({ current: entry.yt, auto: false });
+    });
+
+    // --- Fase 4: papelera ---
+    // Lo quitado (listas y canciones) se puede ver y devolver a su sitio. No hay «vaciar»: nada se borra.
+    priv.get('/trash', (req, res) => {
+        const { lists, tracks } = req.ctx.lists.trash();
+        res.json({ lists, tracks: tracks.map(item => ({ ...item, track: show(item.track) })) });
+    });
+
+    priv.post('/trash/restore', (req, res) => {
+        const { type, id, listId } = req.body ?? {};
+        let result = { error: 'bad_request' };
+        if (type === 'list') result = req.ctx.lists.restoreList(id);
+        else if (type === 'track' && typeof id === 'string') result = req.ctx.lists.restoreTrack(id, typeof listId === 'string' ? listId : null);
+        if (result.error) return res.status({ not_found: 404, bad_request: 400 }[result.error] ?? 409).json({ error: result.error });
+        log(`[papelera] ${req.user.name} restaura ${type === 'list' ? 'la lista' : 'una canción en'} «${result.list.name}»`);
+        res.json({ ok: true, added: result.added ?? null, list: ListStore.summary(result.list) });
+    });
+
+    // --- Fase 4: «Probar extracción» (Ajustes) ---
+    // Comprueba, sin pasar por la memoria de audio, que el buscador responde y que YouTube entrega audio.
+    let probing = false;
+    priv.post('/diagnostics/extract', async (req, res) => {
+        if (probing) return res.status(429).json({ error: 'busy' });
+        probing = true;
+        try {
+            const result = { search: null, extract: null };
+            let started = Date.now();
+            try {
+                const found = await search('me at the zoo');
+                result.search = { ok: found.length > 0, ms: Date.now() - started };
+            } catch {
+                result.search = { ok: false, ms: Date.now() - started };
+            }
+            started = Date.now();
+            result.extract = await new Promise(resolve => {
+                const stream = open(`https://www.youtube.com/watch?v=${PROBE_VIDEO}`, {});
+                let settled = false;
+                let timer = null;
+                const finish = outcome => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    stream.kill();
+                    resolve({ ...outcome, ms: Date.now() - started });
+                };
+                timer = setTimeout(() => finish({ ok: false, message: 'YouTube no ha respondido a tiempo' }), probeTimeoutMs);
+                stream.stdout.once('data', () => finish({ ok: true }));
+                stream.done.then(({ stderr }) => finish({ ok: false, message: explain(stderr) }));
+            });
+            result.ok = result.search.ok && result.extract.ok;
+            log(`[probar] buscador ${result.search.ok ? 'bien' : 'MAL'} (${result.search.ms} ms), extracción ${result.extract.ok ? 'bien' : 'MAL'} (${result.extract.ms} ms)`);
+            res.json(result);
+        } finally {
+            probing = false;
+        }
     });
 
     // --- Actualización de la app ---

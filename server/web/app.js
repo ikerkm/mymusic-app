@@ -240,6 +240,7 @@ const st = {
     search: { query: '', results: null, hint: null, busy: false, error: null },
     queue: { open: false, entries: [], count: 0, limit: 30 },
     full: false,                 // reproductor a pantalla completa (pantalla estrecha)
+    radio: false,                // la casilla «Radio» del usuario (se recuerda en el servidor)
 };
 
 // ---------------------------------------------------------------- reproductor
@@ -259,6 +260,7 @@ const duration = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? 
 /** Pone en el reproductor la canción actual de la sesión, por el minuto que diga la sesión. */
 function load(view, { play = true } = {}) {
     st.session = view;
+    st.radio = view?.radio?.enabled ?? st.radio;
     const track = view?.window?.current?.track;
     if (!track) return;
     const at = (view.positionMs ?? 0) / 1000;
@@ -316,14 +318,37 @@ function advance() {
         audio.play().catch(() => {});
         return;
     }
-    if (next) gotoKey(next.key);
-    else updateBar();
+    if (next) return void gotoKey(next.key);
+    // Sin siguiente: puede que la radio la esté buscando o la acabe de añadir
+    updateBar();
+    waitForNext().then(track => track && gotoKey(track.key));
+}
+
+/** Pregunta al servidor si ya hay canción siguiente (la radio añade tandas); espera mientras la esté buscando. */
+async function waitForNext() {
+    for (let attempt = 0; attempt < 15; attempt++) {
+        let session;
+        try {
+            session = (await api('GET', '/session')).session;
+        } catch {
+            return null;
+        }
+        if (!session || session.id !== st.session?.id || session.active === false || pl.displaced) return null;
+        if (session.window?.current?.track?.key !== pl.key) return null;
+        if (session.window?.next?.track) {
+            st.session = session;
+            return session.window.next.track;
+        }
+        if (session.radio?.status !== 'loading') return null;
+        await sleep(2000);
+    }
+    return null;
 }
 
 function next() {
     if (pl.displaced || !pl.key) return void resume();
     const track = st.session?.window?.next?.track;
-    if (!track) return;
+    if (!track) return void waitForNext().then(found => found && gotoKey(found.key));
     if (track.key === pl.key) {
         audio.currentTime = 0;
         return;
@@ -382,10 +407,31 @@ async function report() {
     const positionMs = Math.floor(audio.currentTime * 1000);
     if (positionMs <= 0) return;
     try {
-        await api('PUT', '/session/state', { key: pl.key, positionMs });
+        const result = await api('PUT', '/session/state', { key: pl.key, positionMs });
+        // La sesión ha crecido (la radio añadió canciones): se vuelve a pedir para conocer la siguiente
+        if (st.session && Number.isInteger(result?.count) && (result.count !== st.session.count || result.radio !== (st.session.radio?.status ?? 'idle'))) syncSession();
     } catch (error) {
         if (error.status === 409) displacedNow();
     }
+}
+
+/** Trae la vista de la sesión sin tocar el audio: si otro dispositivo la lleva, este se calla; si ha cambiado, se refleja. */
+async function syncSession() {
+    if (!st.user || !pl.key || pl.displaced) return;
+    let session;
+    try {
+        session = (await api('GET', '/session')).session;
+    } catch {
+        return;       // sin red un momento
+    }
+    if (session && session.active === false) return displacedNow();
+    if (!session || session.id !== st.session?.id) return;
+    if (session.window?.current?.track?.key !== pl.key) return;      // en pleno cambio de canción: manda lo de aquí
+    st.session = session;
+    st.radio = session.radio?.enabled ?? st.radio;
+    syncRadioChecks();
+    updateBar();
+    if (st.queue.open) refreshQueue();
 }
 
 audio.addEventListener('loadedmetadata', () => {
@@ -416,13 +462,7 @@ audio.addEventListener('error', async () => {
 
 // Mientras suena: el servidor sabe por dónde vamos, y se mira si otro dispositivo ha tomado la sesión
 setInterval(() => { if (!audio.paused) report(); }, 20000);
-setInterval(async () => {
-    if (audio.paused || !pl.key || !st.user) return;
-    try {
-        const { session } = await api('GET', '/session');
-        if (session && session.active === false) displacedNow();
-    } catch { /* sin red un momento */ }
-}, 15000);
+setInterval(() => { if (!audio.paused) syncSession(); }, 15000);
 window.addEventListener('pagehide', () => {
     if (!pl.key || pl.displaced || !(audio.currentTime > 0)) return;
     fetch('/api/session/state', {
@@ -490,6 +530,71 @@ async function cycleRepeat() {
     updateBar();
 }
 
+// ---------------------------------------------------------------- radio (Fase 4)
+
+// Canción que puso la radio y que el usuario aún no ha guardado en una lista
+const fromRadio = track => Boolean(track?.radio && !track.saved);
+
+/** Casilla «Radio»: al acabarse lo que suena, seguir con canciones parecidas. Es del usuario, no de la sesión. */
+function radioCheck() {
+    const input = h('input.radiochk', { type: 'checkbox', onchange: () => run(() => setRadio(input.checked), 'No se pudo cambiar la radio.').then(syncRadioChecks) });
+    input.checked = st.radio;
+    return h('label.check', { title: 'Al acabarse lo que suena, seguir con canciones parecidas que no tengas ya en la lista' }, input, h('span', null, 'Radio'));
+}
+function syncRadioChecks() {
+    for (const input of document.querySelectorAll('input.radiochk')) input.checked = st.radio;
+}
+async function setRadio(enabled) {
+    const { radio } = await api('PUT', '/radio', { enabled });
+    st.radio = radio.enabled;
+    if (st.session) st.session.radio = radio;
+    syncRadioChecks();
+    renderQueue();
+    // Si ya se está al final de la lista, el servidor añade la tanda enseguida: se recoge al poco
+    if (enabled) for (const ms of [3000, 9000]) setTimeout(syncSession, ms);
+}
+
+/** «Tu radio» (Inicio): una sesión de canciones parecidas a lo que escuchas. */
+let radioStarting = false;
+async function startHomeRadio() {
+    if (radioStarting) return;
+    radioStarting = true;
+    if (st.view.name === 'home') renderMain();
+    try {
+        const { session } = await api('POST', '/session', { radio: 'home' }, 120000);
+        radioStarting = false;
+        load(session);
+    } catch (error) {
+        if (error.status !== 401) {
+            toast({
+                no_seeds: 'Todavía no hay de dónde partir: escucha algo o crea una lista primero.',
+                radio_empty: 'No han salido canciones nuevas. Prueba más tarde.',
+            }[error.code] ?? 'No se pudo empezar la radio. Prueba otra vez.');
+        }
+    } finally {
+        radioStarting = false;
+        if (st.view.name === 'home') renderMain();
+    }
+}
+
+/** Guardar una canción que puso la radio: si se escucha una lista, va directa a ella; si no, se elige a cuál. */
+async function keepRadioTrack(track) {
+    const source = st.session?.source;
+    if (source?.type !== 'list') return pickList(track);
+    await addToList({ id: source.id, name: source.name }, track);
+}
+const keepTitle = () => (st.session?.source?.type === 'list' ? `Añadir a «${st.session.source.name}»` : 'Añadir a una lista');
+
+// Guardada en una lista, deja de ser «de la radio» (el servidor lo apunta igual)
+function markSaved(key) {
+    const hit = track => { if (track?.key === key && track.radio) track.saved = true; };
+    const win = st.session?.window;
+    for (const entry of [win?.prev, win?.current, win?.next, ...st.queue.entries]) hit(entry?.track);
+    hit(pl.track);
+    updateBar();
+    renderQueue();
+}
+
 // ---------------------------------------------------------------- datos
 
 async function refreshLists() {
@@ -499,6 +604,8 @@ async function refreshLists() {
 async function refreshSession() {
     try {
         st.session = (await api('GET', '/session')).session;
+        st.radio = st.session?.radio?.enabled ?? st.radio;
+        syncRadioChecks();
     } catch { /* se queda la que había */ }
     updateBar();
 }
@@ -660,6 +767,7 @@ function trackMenu(track, { listId = null, play }) {
 async function addToList(list, track) {
     const { added } = await api('POST', `/lists/${list.id}/tracks`, { track: bare(track) });
     toast(added > 0 ? `Añadida a «${list.name}»` : `Ya estaba en «${list.name}»`);
+    markSaved(track.key);
     await refreshLists();
     if (st.view.name === 'list' && st.view.id === list.id) loadList(list.id);
 }
@@ -874,8 +982,94 @@ const PASSWORD_ERRORS = {
     network: 'Sin conexión con el servidor.',
 };
 
+const shortDate = iso => {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' });
+};
+
+/** «Probar extracción»: el servidor comprueba que el buscador responde y que YouTube entrega audio. */
+function probeRow() {
+    const out = h('div.probe');
+    const seconds = ms => `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
+    const line = (name, part) => h('p', { class: part.ok ? 'ok' : 'err' },
+        `${name}: ${part.ok ? 'responde' : 'no responde'} (${seconds(part.ms)})${part.ok || !part.message ? '' : ` — ${part.message}`}`);
+    const button = h('button.btn', { type: 'button', onclick: async () => {
+        button.disabled = true;
+        button.textContent = 'Probando…';
+        out.replaceChildren();
+        try {
+            const result = await api('POST', '/diagnostics/extract', undefined, 70000);
+            out.replaceChildren(line('Buscador', result.search), line('YouTube', result.extract));
+        } catch (error) {
+            if (error.status !== 401) out.replaceChildren(h('p.err', null, error.code === 'busy' ? 'Ya hay una prueba en marcha.' : 'No se pudo hacer la prueba: el servidor no responde.'));
+        }
+        button.disabled = false;
+        button.textContent = 'Probar';
+    } }, 'Probar');
+    return [h('div.rowline', null, h('div', null, h('b', null, 'Probar extracción'), h('small.sub', null, 'Comprueba que YouTube responde')), button), out];
+}
+
+/** Papelera: lo quitado (listas y canciones) se puede devolver a su sitio. Nada se borra. */
+function openTrash() {
+    openModal(close => {
+        const body = h('div.picks', null, h('p.note', null, 'Cargando…'));
+        const restore = (payload, done) => run(async () => {
+            const { list } = await api('POST', '/trash/restore', payload);
+            toast(done(list));
+            await Promise.all([fill(), refreshLists()]);
+            if (st.view.name === 'list' && st.view.id === list.id) loadList(list.id);
+            else if (st.view.name === 'home' || st.view.name === 'lists') renderMain();
+        }, 'No se pudo restaurar.');
+        // La lista de la canción ya no existe: se elige a cuál va
+        const chooseList = item => {
+            if (st.lists.length === 0) return toast('Crea antes una lista donde ponerla.');
+            openModal(closePick => [
+                h('h2', null, 'Restaurar en…'),
+                h('p.note', null, item.track.title),
+                h('div.picks', null, st.lists.map(list => h('button.pick', { type: 'button', onclick: () => {
+                    closePick();
+                    restore({ type: 'track', id: item.id, listId: list.id }, target => `Añadida a «${target.name}»`);
+                } }, cover(list.thumb, 's34', list.id), h('div.tx', null, h('b', null, list.name), h('small', null, songs(list.count)))))),
+                h('div.acts', null, h('button.btn', { type: 'button', onclick: closePick }, 'Cancelar')),
+            ]);
+        };
+        async function fill() {
+            let trash;
+            try {
+                trash = await api('GET', '/trash');
+            } catch {
+                return body.replaceChildren(h('p.err', null, 'No se pudo leer la papelera.'));
+            }
+            const rows = [
+                ...trash.lists.map(item => h('div.pick', null, cover(item.thumb, 's34', item.id),
+                    h('div.tx', null, h('b', null, item.name), h('small', null, ['Lista', songs(item.count), `quitada el ${shortDate(item.removedAt)}`].join(' · '))),
+                    h('button.btn', { type: 'button', onclick: () => restore({ type: 'list', id: item.id }, list => `Lista «${list.name}» restaurada`) }, 'Restaurar'))),
+                ...trash.tracks.map(item => h('div.pick', null, cover(item.track.thumb, 's34', item.track.key),
+                    h('div.tx', null, h('b', null, item.track.title),
+                        h('small', null, [item.track.artist, item.listName ? `de «${item.listName}»` : null, item.removedAt ? shortDate(item.removedAt) : null].filter(Boolean).join(' · '))),
+                    item.listId
+                        ? h('button.btn', { type: 'button', onclick: () => restore({ type: 'track', id: item.id }, list => `Devuelta a «${list.name}»`) }, 'Restaurar')
+                        : h('button.btn', { type: 'button', title: 'Su lista ya no existe: elige otra', onclick: () => chooseList(item) }, 'Restaurar en…'))),
+            ];
+            body.replaceChildren(...(rows.length ? rows : [h('p.note', null, 'La papelera está vacía.')]));
+        }
+        fill();
+        return [
+            h('h2', null, 'Papelera'),
+            h('p.note', null, 'Aquí queda lo que quitas: listas y canciones. Nada se borra, y se puede devolver a su sitio.'),
+            body,
+            h('div.acts', null, h('button.btn', { type: 'button', onclick: close }, 'Cerrar')),
+        ];
+    });
+}
+
 function openSettings() {
     openModal(close => {
+        const trashInfo = h('small.sub', null, 'Lo que has quitado, por si quieres recuperarlo');
+        api('GET', '/trash').then(trash => {
+            const n = trash.lists.length + trash.tracks.length;
+            trashInfo.textContent = n === 0 ? 'Vacía' : n === 1 ? '1 elemento recuperable' : `${n} elementos recuperables`;
+        }).catch(() => {});
         const field = (label, autocomplete) => {
             const input = h('input.in', { type: 'password', autocomplete });
             return [h('label', null, label), input, input];
@@ -901,6 +1095,9 @@ function openSettings() {
             h('h2', null, 'Ajustes'),
             h('div.rowline', null, h('span.mut', null, 'Usuario'), h('b', null, st.user?.name ?? '')),
             h('div.rowline', null, h('span.mut', null, 'Servidor'), h('span', null, `${location.host} · ${st.version}`)),
+            probeRow(),
+            h('div.rowline', null, h('div', null, h('b', null, 'Papelera'), trashInfo),
+                h('button.btn', { type: 'button', onclick: () => { close(); openTrash(); } }, 'Abrir')),
             h('div.sec', null, 'Cambiar contraseña'),
             l1, current, l2, fresh, l3, again,
             message,
@@ -977,11 +1174,11 @@ function buildFull() {
         h('div.art', null, f.cover),
         h('div.meta', null,
             h('div.tx', null, f.title, f.artist),
-            h('button.ib', { type: 'button', title: 'Añadir a una lista', onclick: () => pl.track && pickList(pl.track) }, icon('listadd'))),
+            h('button.ib', { type: 'button', title: 'Añadir a una lista', onclick: () => pl.track && (fromRadio(pl.track) ? run(() => keepRadioTrack(pl.track)) : pickList(pl.track)) }, icon('listadd'))),
         f.seek,
         h('div.times', null, f.cur, f.dur),
         h('div.fctl', null, f.shuffle, f.prev, f.play, f.next, f.repeat),
-        h('div.foot', null, h('button.btn', { type: 'button', onclick: toggleQueue }, icon('queue', 'sm'), 'Cola'), f.count));
+        h('div.foot', null, h('button.btn', { type: 'button', onclick: toggleQueue }, icon('queue', 'sm'), 'Cola'), radioCheck(), f.count));
 
     // La barra se arrastra con el dedo; el salto se hace al soltar
     let dragging = false;
@@ -1040,17 +1237,18 @@ function buildBar() {
         updateProgress();
     } }, h('div', null, b.fill));
     b.queue = h('button.ib', { type: 'button', title: 'Cola', onclick: toggleQueue }, icon('queue'));
+    b.keep = h('button.ib.keep.hidden', { type: 'button', title: 'Añadir a una lista', onclick: () => pl.track && run(() => keepRadioTrack(pl.track)) }, icon('plus'));
     b.volume = h('input.vol', { type: 'range', min: 0, max: 100, title: 'Volumen', oninput: event => {
         audio.volume = Number(event.target.value) / 100;
         try { localStorage.setItem('mm.volume', String(audio.volume)); } catch { /* sin almacenamiento */ }
     } });
     b.volume.value = String(Math.round(audio.volume * 100));
     b.el = h('footer.player', null,
-        h('div.now', null, b.cover, h('div.tx', null, b.title, b.sub)),
+        h('div.now', null, b.cover, h('div.tx', null, b.title, b.sub), b.keep),
         h('div.ctl', null,
             h('div.bts', null, b.shuffle, b.prev, b.play, b.next, b.repeat),
             h('div.prog', null, b.cur, b.seek, b.dur)),
-        h('div.right', null, b.queue, icon('vol'), b.volume));
+        h('div.right', null, radioCheck(), b.queue, icon('vol'), b.volume));
     return b;
 }
 
@@ -1071,8 +1269,10 @@ function updateBar() {
     b.sub.classList.toggle('bad', Boolean(pl.error));
     b.sub.textContent = pl.error ?? (!track
         ? 'Elige una lista o busca una canción'
-        : [track.artist, mine && session.count > 1 ? `de ${session.source?.name ?? ''}` : null, mine && session.count > 1 ? `${session.index + 1} de ${session.count}` : null]
+        : [track.artist, fromRadio(track) ? 'Radio' : null, mine && session.count > 1 ? `de ${session.source?.name ?? ''}` : null, mine && session.count > 1 ? `${session.index + 1} de ${session.count}` : null]
             .filter(Boolean).join(' · '));
+    b.keep.classList.toggle('hidden', !fromRadio(track));
+    b.keep.title = keepTitle();
     const playing = !audio.paused;
     b.playIcon.replaceChildren(icon(playing ? 'pause' : 'play', 'f'));
     b.play.title = playing ? 'Pausar' : 'Reproducir';
@@ -1102,7 +1302,7 @@ function updateBar() {
     m.sub.textContent = pl.error ?? track?.artist ?? '';
     m.sub.classList.toggle('bad', Boolean(pl.error));
     f.title.textContent = track?.title ?? '';
-    f.artist.replaceChildren(pl.error ?? track?.artist ?? '', ...[!pl.error && track ? badge(track.platform) : null].filter(Boolean));
+    f.artist.replaceChildren(pl.error ?? track?.artist ?? '', ...[!pl.error && track ? badge(track.platform) : null, !pl.error && fromRadio(track) ? h('span.auto', null, 'Radio') : null].filter(Boolean));
     f.artist.classList.toggle('bad', Boolean(pl.error));
     const fromList = mine && session.count > 1 && session.source?.name;
     f.fromLabel.textContent = fromList ? 'Sonando de' : 'Sonando';
@@ -1318,6 +1518,11 @@ function viewHome() {
                 h('div.mut', null, [`Canción ${current.index + 1} de ${session.count}`, fmt((session.positionMs ?? 0) / 1000),
                     session.active === false && session.deviceName ? `estaba sonando en ${session.deviceName}` : null].filter(Boolean).join(' · '))),
             h('button.btn.pri', { type: 'button', title: 'Continuar aquí', onclick: resume }, icon('play', 'f sm'), h('span.lbl', null, 'Continuar aquí'))),
+        (st.lists.length > 0 || st.recent.length > 0) && h('div.banner.radio', null,
+            h('div.radtile', null, icon('radio')),
+            h('div.tx', null, h('b', null, 'Tu radio'), h('div.mut', null, radioStarting ? 'Buscando canciones parecidas…'
+                : [h('span.only-d', null, 'Canciones parecidas a lo que escuchas, sin repetir las tuyas'), h('span.only-m', null, 'Parecidas a lo que escuchas')])),
+            h('button.btn', { type: 'button', title: 'Escuchar tu radio', disabled: radioStarting, onclick: startHomeRadio }, icon('play', 'f sm'), h('span.lbl', null, radioStarting ? 'Buscando…' : 'Escuchar'))),
         st.lists.length > 0 && [
             h('div.sec', null, 'Tus listas'),
             h('div.cards', null, st.lists.map(list => h('button.card', { type: 'button', onclick: () => go({ name: 'list', id: list.id }) },
@@ -1440,6 +1645,7 @@ function viewList() {
                     h('button.btn.pri', { type: 'button', disabled: summary.count === 0, onclick: () => start(null, false) }, icon('play', 'f sm'), 'Reproducir'),
                     h('button.btn', { type: 'button', title: 'Aleatorio', disabled: summary.count === 0, onclick: () => start(null, true) }, icon('shuffle', 'sm'), h('span.only-d', null, 'Aleatorio')),
                     h('button.btn', { type: 'button', onclick: () => openImport(summary) }, icon('import', 'sm'), 'Importar'),
+                    radioCheck(),
                     h('button.btn.icon.only-d', { type: 'button', title: 'Más', onclick: more }, icon('more', 'f'))))),
         !list ? h('p.empty', null, 'Cargando…')
             : list.tracks.length === 0 ? h('p.empty', null, 'Esta lista está vacía. Añade canciones desde Buscar o con «Importar».')
@@ -1489,10 +1695,17 @@ function renderQueue() {
         await refreshQueue();
     });
     const touch = mobile();     // en pantalla estrecha: tocar una fila salta a ella y se reordena arrastrando el asa
+    // Lo que puso la radio lleva su marca y un «+» para guardarlo (en la lista que suena, si suena una)
+    const sub = track => h('small', null, track.artist ?? '', fromRadio(track) && h('span.auto', null, 'Radio'));
+    const keep = track => fromRadio(track) && h('button.ib.add', { type: 'button', title: keepTitle(), onclick: event => {
+        event.stopPropagation();
+        run(() => keepRadioTrack(track));
+    } }, icon('plus'));
     const rows = st.queue.entries.map(entry => {
         const row = h('div.qrow', { draggable: !touch, ondblclick: () => !touch && gotoKey(entry.track.key), onclick: () => touch && gotoKey(entry.track.key) },
             cover(entry.track.thumb, 's34', entry.track.key),
-            h('div.tx', null, h('b', null, entry.track.title), h('small', null, entry.track.artist ?? '')),
+            h('div.tx', null, h('b', null, entry.track.title), sub(entry.track)),
+            keep(entry.track),
             h('span.grip', { title: 'Arrastra para reordenar' }, icon('drag')),
             h('button.ib.x', { type: 'button', title: 'Quitar de la cola', onclick: event => {
                 event.stopPropagation();
@@ -1524,15 +1737,21 @@ function renderQueue() {
     }
     const parts = [
         touch
-            ? h('div.head', null, h('button.ib', { type: 'button', title: 'Cerrar', onclick: toggleQueue }, icon('down')), h('span.mid', null, 'Cola'), h('span.sp'))
-            : h('div.head', null, 'Cola', h('button.ib', { type: 'button', title: 'Cerrar', onclick: toggleQueue }, icon('close'))),
+            ? h('div.head', null, h('button.ib', { type: 'button', title: 'Cerrar', onclick: toggleQueue }, icon('down')), h('span.mid', null, 'Cola'), radioCheck())
+            : h('div.head', null, h('span.grow', null, 'Cola'), radioCheck(), h('button.ib', { type: 'button', title: 'Cerrar', onclick: toggleQueue }, icon('close'))),
         !current ? h('p.empty', null, 'No hay nada en la cola.') : [
             h('div.sec', null, 'Sonando'),
             h('div.qrow.cur', null, cover(current.track.thumb, 's34', current.track.key),
-                h('div.tx', null, h('b', null, current.track.title), h('small', null, current.track.artist ?? ''))),
+                h('div.tx', null, h('b', null, current.track.title), sub(current.track)),
+                keep(current.track)),
             h('div.sec', null, `A continuación · ${session.source?.name ?? ''}`),
             rows.length === 0 ? h('p.empty', null, 'No hay más canciones después de esta.') : list,
             shownUpTo < st.queue.count && h('button.btn', { type: 'button', onclick: () => { st.queue.limit += 30; refreshQueue(); } }, 'Ver más'),
+            (st.radio || session.source?.type === 'radio') && session.repeat === 'off' && h('p.note.radnote', null, {
+                loading: 'Radio: buscando canciones parecidas…',
+                error: 'Radio: YouTube no ha respondido. Se volverá a intentar.',
+                empty: 'Radio: no han salido canciones nuevas.',
+            }[session.radio?.status] ?? 'Radio: al acabarse, seguirá con canciones parecidas.'),
         ],
     ];
     ui.drawer.replaceChildren(...parts.flat(Infinity).filter(Boolean));
@@ -1562,6 +1781,7 @@ function showLogin(message = null) {
     Object.assign(st.search, { query: '', results: null, hint: null, busy: false, error: null });
     st.queue.open = false;
     st.full = false;
+    st.radio = false;
     const user = h('input.in', { type: 'text', name: 'username', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: false, maxLength: 30 });
     const password = h('input.in', { type: 'password', name: 'password', autocomplete: 'current-password' });
     const error = h('div', null, message && h('p.err', null, message));
@@ -1607,6 +1827,9 @@ async function boot() {
     }
     st.user = me.user;
     st.version = me.version ?? '';
+    try {
+        st.radio = (await api('GET', '/radio')).radio.enabled;
+    } catch { /* un servidor anterior a la radio: la casilla queda sin marcar */ }
     buildShell();
     updateBar();
     go({ name: 'home' });

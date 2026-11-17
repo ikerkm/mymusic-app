@@ -321,6 +321,66 @@ try {
     await shot('9_ajustes');
     await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
 
+    // 6b. Fase 4 — «Probar extracción» (lee de YouTube de verdad, como buscar)
+    await js(`document.querySelector('.who').click()`);
+    await until(`${text('.modal h2')} === 'Ajustes'`, 5000);
+    await js(clickText('.modal .btn', 'Probar'));
+    const probed = await until(`document.querySelectorAll('.modal .probe p').length === 2 && ${text('.modal .probe')}`, 90000, 500);
+    check('Ajustes: «Probar extracción» dice que el buscador y YouTube responden', Boolean(probed) && await js(`document.querySelectorAll('.modal .probe p.ok').length === 2`), String(probed));
+    await shot('9b_probar_extraccion');
+    await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
+
+    // Papelera: quitar una canción de la lista, verla en la papelera y devolverla
+    const goneTitle = await js(`document.querySelectorAll('.main tbody tr')[4].querySelector('.t span').textContent`);
+    await js(`document.querySelectorAll('.main tbody tr')[4].querySelector('.ib').click()`);
+    await until(`!!document.querySelector('.menu')`);
+    await js(clickText('.menu button', 'Quitar de la lista'));
+    await until(`document.querySelectorAll('.main tbody tr').length === 4`, 8000);
+    await js(`document.querySelector('.who').click()`);
+    await until(`${text('.modal h2')} === 'Ajustes'`, 5000);
+    const trashLabel = await until(`/recuperable/.test(${text('.modal')})`, 8000);
+    await js(clickText('.modal .btn', 'Abrir'));
+    const inTrash = await until(`${text('.modal h2')} === 'Papelera' && [...document.querySelectorAll('.modal .pick')].some(e => e.textContent.includes(${JSON.stringify(goneTitle)}))`, 8000);
+    check('Papelera: Ajustes dice cuánto hay y la canción quitada aparece para recuperarla', Boolean(trashLabel) && Boolean(inTrash), goneTitle);
+    await shot('9c_papelera');
+    await js(`[...document.querySelectorAll('.modal .pick')].find(e => e.textContent.includes(${JSON.stringify(goneTitle)})).querySelector('.btn').click()`);
+    check('Papelera: «Restaurar» la devuelve a su lista', await until(`${text('.toast')}.includes('Devuelta a') && document.querySelectorAll('.main tbody tr').length === 5`, 10000), await js(text('.toast')));
+    await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
+
+    // Radio: la casilla se marca en la lista y queda marcada en todas partes (lista, cola y barra)
+    const checks = `[...document.querySelectorAll('input.radiochk')]`;
+    await js(`document.querySelector('.listhead input.radiochk').click()`);
+    check('Radio: marcar la casilla en la lista la marca en todas partes y se recuerda en el servidor',
+        await until(`${checks}.length >= 3 && ${checks}.every(e => e.checked)`, 8000) && (await asOther('GET', '/api/radio')).body.radio?.enabled === true);
+    // Se reproduce desde la penúltima: al quedar una sola por detrás, la radio añade una tanda (lee mezclas de YouTube de verdad)
+    await js(dblclickRow(3));
+    const radioRows = await until(`document.querySelectorAll('.drawer .qrow .auto').length >= 3 && document.querySelectorAll('.drawer .qrow .auto').length`, 240000, 1000);
+    check('Radio: al quedar una canción, la cola recibe canciones parecidas marcadas «Radio»', radioRows === 5, `${radioRows} de la radio · ${await js(text('.drawer .radnote'))}`);
+    const clash = await js(`(() => {
+        const mine = new Set([...document.querySelectorAll('.main tbody tr .t span')].map(e => e.textContent));
+        return [...document.querySelectorAll('.drawer .qrow')].filter(row => row.querySelector('.auto') && mine.has(row.querySelector('b').textContent)).length;
+    })()`);
+    check('Radio: ninguna de las que pone está ya en la lista', clash === 0, [...new Set(await js(`[...document.querySelectorAll('.drawer .qrow')].filter(row => row.querySelector('.auto')).map(row => row.querySelector('b').textContent.slice(0, 40))`))].join(' | '));
+    const keptTitle = await js(`document.querySelector('.drawer .qrow .add').closest('.qrow').querySelector('b').textContent`);
+    await js(`document.querySelector('.drawer .qrow .add').click()`);
+    check('Radio: el «+» guarda la canción en la lista que suena y deja de ser «de la radio»',
+        await until(`${text('.toast')}.includes('Añadida a') && document.querySelectorAll('.main tbody tr').length === 6 && document.querySelectorAll('.drawer .qrow .auto').length === ${Number(radioRows) - 1}`, 10000),
+        `${keptTitle} · ${await js(text('.toast'))}`);
+    await shot('9d_radio_en_la_cola');
+    await js(`document.querySelector('.drawer input.radiochk').click()`);
+    check('Radio: desmarcarla la apaga en todas partes',
+        await until(`${checks}.every(e => !e.checked) && !document.querySelector('.drawer .radnote')`, 8000) && (await asOther('GET', '/api/radio')).body.radio?.enabled === false);
+
+    // «Tu radio» en Inicio: una sesión hecha de canciones parecidas a lo que escucha
+    await js(clickText('.side .nav', 'Inicio'));
+    await until(`!!document.querySelector('.banner.radio .btn')`, 8000);
+    await js(`document.querySelector('.banner.radio .btn').click()`);
+    const homeRadio = await until(`${text('.player .now small')}.includes('Tu radio') && !${A}.paused && ${A}.currentTime > 1 && ${text('.player .now b')}`, 240000, 1000);
+    check('«Tu radio» (Inicio) empieza una sesión de canciones parecidas y suena', Boolean(homeRadio), `${homeRadio} · ${await js(text('.player .now small'))}`);
+    await shot('9e_tu_radio');
+    await js(clickText('.side .pl', listName));
+    await until(`${text('.listhead h3')} === ${JSON.stringify(listName)}`, 8000);
+
     // 7. Limpieza: la lista de prueba, a la papelera
     await js(`document.querySelector('.listhead .btn.icon').click()`);
     await until(`!!document.querySelector('.menu')`);
@@ -444,6 +504,7 @@ try {
     await tap(q('.full .foot .btn'));
     check(`${M}la cola se abre a pantalla completa con la siguiente`, await until(`!!${shown('.drawer')} && document.querySelectorAll('.drawer .qrow').length === 2 && document.querySelector('.drawer').getBoundingClientRect().width >= window.innerWidth`, 8000));
     await shot('m10_cola');
+    check(`${M}la casilla «Radio» está en la cola y en el reproductor, y cabe`, await js(`!!document.querySelector('.drawer .head input.radiochk') && !!document.querySelector('.full .foot input.radiochk') && document.querySelector('.drawer .head').scrollWidth <= document.querySelector('.drawer .head').clientWidth + 1`));
     await js('history.back()');
     check(`${M}«atrás» cierra la cola y deja el reproductor`, await until(`!${shown('.drawer')} && !!${shown('.full')}`, 5000));
     await js('history.back()');
@@ -465,6 +526,10 @@ try {
     await tap(q('.main .top .ib'));
     check(`${M}Ajustes se abre desde Inicio`, await until(`${text('.modal h2')} === 'Ajustes' && ${text('.modal')}.includes(${JSON.stringify(user)})`, 5000));
     await shot('m12_ajustes');
+    await js(clickText('.modal .btn', 'Abrir'));
+    check(`${M}la papelera se abre como hoja y cabe en la pantalla`, await until(`${text('.modal h2')} === 'Papelera' && document.querySelectorAll('.modal .pick').length > 0`, 8000)
+        && await js(`document.querySelector('.modal').scrollWidth <= document.querySelector('.modal').clientWidth + 1 && ${fits}`));
+    await shot('m13_papelera');
     await js(`[...document.querySelectorAll('.modal .btn')].find(e => e.textContent.trim() === 'Cerrar').click()`);
 
     // Limpieza: la lista de prueba a la papelera, desde la pestaña Listas

@@ -7,9 +7,10 @@ import { createApp } from './app.js';
 import { AppDist } from './appdist.js';
 import { PendingImports, importers } from './importers.js';
 import { MatchStore } from './matches.js';
+import { Radio, mixUrl } from './radio.js';
 import { searchYoutube } from './sources.js';
 import { UserStores } from './stores.js';
-import { openAudio } from './ytdlp.js';
+import { fetchPlaylist, openAudio } from './ytdlp.js';
 
 dotenv.config({ path: join(config.root, '.env') });
 
@@ -42,6 +43,7 @@ const app = createApp({
     matches: new MatchStore(config.dataDir, { search: searchYoutube, log }),
     importers,
     pending: new PendingImports(),
+    radio: new Radio({ fetchMix: async (id, limit) => (await fetchPlaylist(mixUrl(id), { limit })).entries, log }),
     webDir: config.webDir,
     prefetchDelayMs: config.prefetchDelayMs,
     version: config.version,
