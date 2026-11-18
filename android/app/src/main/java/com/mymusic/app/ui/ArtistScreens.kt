@@ -93,7 +93,7 @@ fun ArtistStrip(artists: List<ArtistCard>, showListeners: Boolean = false, onOpe
     }
 }
 
-private fun kindLabel(kind: String) = when (kind) {
+internal fun kindLabel(kind: String) = when (kind) {
     "single" -> "Sencillo"
     "ep" -> "EP"
     else -> "Álbum"
@@ -131,7 +131,7 @@ private fun ReleaseCard(release: Release, width: Dp?, onClick: () -> Unit) {
 
 /** Arriba: la flecha de volver y, si se da, un título. */
 @Composable
-private fun BackBar(vm: AppViewModel, title: String? = null) {
+internal fun BackBar(vm: AppViewModel, title: String? = null) {
     Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(40.dp).clickable { vm.back() }.testTag("back"), contentAlignment = Alignment.CenterStart) {
             Icon(MmIcons.Back, contentDescription = "Volver", tint = Mm.Tx, modifier = Modifier.size(22.dp))
@@ -151,7 +151,7 @@ private fun PageWait(error: String?) {
 
 /** Título de sección con su acción a la derecha («Ver todas · 148»). */
 @Composable
-private fun SectionHead(title: String, action: String?, tag: String = "", onAction: () -> Unit = {}) {
+internal fun SectionHead(title: String, action: String?, tag: String = "", onAction: () -> Unit = {}) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) { SectionLabel(title) }
         if (action != null) {
@@ -251,6 +251,11 @@ fun ArtistScreen(vm: AppViewModel, id: String, state: PlayerState) {
                     ArtistAvatar(page.thumb, 96.dp)
                     Text(page.name, color = Mm.Tx, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp).testTag("artistName"))
                     Text(page.listeners?.let { "$it de oyentes al mes" } ?: "Artista", color = Mm.Mut, fontSize = 12.sp)
+                    // «Seguir» (§21): bajo los oyentes; no sale con un servidor que no sabe seguir
+                    page.following?.let { following ->
+                        Spacer(Modifier.height(10.dp))
+                        FollowPill(following, busy = id in vm.followBusy, tag = "follow") { vm.setFollow(id, page.name, !following) }
+                    }
                 }
                 Row(Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PlayButton(enabled = page.songsCount > 0, tag = "playArtist", modifier = Modifier.weight(1f)) { vm.playArtist(id) }

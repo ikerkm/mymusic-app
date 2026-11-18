@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyMusic — maqueta de artistas seguidos y novedades</title>
+<style>
+:root{
+  --page:#15171c; --bg:#0d0e12; --side:#111318; --sur:#1a1c24; --sur2:#252834; --line:#2f3342;
+  --tx:#eef0f6; --mut:#9aa0b3; --acc:#9d8cff; --acc-d:#1b1640; --ok:#6fdc9a;
+  --new:#ffd166;
+  --a1:#9d8cff; --a1d:#1b1640; --a2:#5fd4c4; --a2d:#0f2a2a; --a3:#ff9a4a; --a3d:#2c1a0e;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page);color:var(--tx);font:13px/1.4 "Segoe UI",Roboto,system-ui,sans-serif;padding:30px 24px 70px}
+header.top{max-width:1290px;margin:0 auto 26px}
+header.top h1{font-size:24px;font-weight:650;letter-spacing:-.3px}
+header.top p{color:var(--mut);margin-top:6px;max-width:90ch;font-size:14px}
+header.top ul{color:var(--mut);margin:10px 0 0 18px;max-width:90ch;font-size:13.5px;line-height:1.55}
+header.top li{margin-top:3px}
+header.top li ul{margin-top:2px}
+header.top b{color:var(--tx)}
+h2.part{max-width:1290px;margin:10px auto 18px;font-size:17px;font-weight:650;color:var(--tx);border-bottom:1px solid var(--line);padding-bottom:8px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,300px);gap:40px 30px;justify-content:center;max-width:1290px;margin:0 auto 40px}
+.cell h2{font-size:14px;font-weight:650;margin-bottom:10px}
+.cell h2 span{color:var(--acc);margin-right:6px}
+.cell p.cap,.shot p.cap{color:var(--mut);font-size:12.5px;margin-top:10px;line-height:1.45}
+.cell p.cap b,.shot p.cap b{color:var(--tx)}
+.tag{display:inline-block;font-size:10px;font-weight:700;color:#201a00;background:var(--new);border-radius:99px;padding:1px 7px;margin-left:6px;vertical-align:1px;letter-spacing:.3px}
+.ring{outline:2px dashed var(--new);outline-offset:4px;border-radius:8px}
+
+/* ===== teléfono ===== */
+.ph{width:300px;height:640px;background:var(--bg);border:2px solid #343949;border-radius:34px;overflow:hidden;position:relative;display:flex;flex-direction:column}
+.sb{height:28px;flex:none;display:flex;justify-content:space-between;align-items:flex-end;padding:0 22px 3px;font-size:11px;font-weight:600;color:#d5d8e2}
+.scr{flex:1;min-height:0;overflow:hidden;padding:6px 16px 0;display:flex;flex-direction:column}
+.ic{width:20px;height:20px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ic.f{fill:currentColor;stroke:none}
+.ic.s{width:16px;height:16px}
+.mut{color:var(--mut)}
+.bar-top{display:flex;align-items:center;gap:10px;height:44px;flex:none}
+.bar-top h3{font-size:20px;font-weight:650;flex:1;letter-spacing:-.2px}
+.bar-top .ttl{flex:1;font-size:15px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ph .sec{font-size:11px;font-weight:650;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;margin:14px 0 6px;display:flex;justify-content:space-between;flex:none}
+.ph .sec a{color:var(--acc);text-transform:none;letter-spacing:0;font-size:12px}
+
+.cv{flex:none;border-radius:8px;background:linear-gradient(135deg,#7b6cff,#ff7ac3);position:relative}
+.c2{background:linear-gradient(135deg,#19c3a6,#2b6cff)}
+.c3{background:linear-gradient(135deg,#ffb347,#ff5d6c)}
+.c4{background:linear-gradient(135deg,#3a3f5c,#8e9bd6)}
+.c5{background:linear-gradient(135deg,#d7ff6b,#22b573)}
+.c6{background:linear-gradient(135deg,#ff6bd6,#5b2bff)}
+.c7{background:linear-gradient(135deg,#5ee0ff,#7b6cff)}
+.c8{background:linear-gradient(135deg,#ff9a4a,#8a2be2)}
+.av{border-radius:50% !important}
+.au{display:flex;align-items:center;justify-content:center;border:1px solid}
+.au1{background:var(--a1d);border-color:var(--a1);color:var(--a1)}
+.au2{background:var(--a2d);border-color:var(--a2);color:var(--a2)}
+.au3{background:var(--a3d);border-color:var(--a3);color:var(--a3)}
+/* punto de «aún no lo has abierto» */
+.dot{position:absolute;top:6px;right:6px;width:10px;height:10px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 2px var(--bg)}
+.row .dot{top:-2px;right:-2px}
+.nw{color:var(--acc) !important}
+
+.row{display:flex;align-items:center;gap:10px;padding:6px 0;flex:none}
+.row .cv{width:40px;height:40px}
+.row .t{flex:1;min-width:0}
+.row .t b{display:block;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .t small{display:block;color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row > .ic{color:var(--mut)}
+
+.mini{flex:none;margin:6px 10px;background:var(--sur2);border-radius:14px;padding:8px 12px 9px 8px;display:flex;align-items:center;gap:10px;position:relative;overflow:hidden}
+.mini .cv{width:36px;height:36px}
+.mini .t{flex:1;min-width:0}
+.mini .t b{display:block;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini .t small{color:var(--mut);font-size:11px}
+.mini::after{content:"";position:absolute;left:0;bottom:0;height:2px;width:38%;background:var(--acc)}
+.pnav{flex:none;height:56px;display:flex;border-top:1px solid var(--line);background:var(--bg)}
+.pnav div{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:10.5px;color:var(--mut)}
+.pnav div.on{color:var(--acc)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:38px;padding:0 14px;border-radius:99px;background:var(--sur2);font-weight:600;font-size:13px;white-space:nowrap}
+.btn.pri{background:var(--acc);color:#14102e}
+.btn.out{background:transparent;border:1px solid #4a5068;height:30px;padding:0 14px;font-size:12px}
+.btn.out.sm{height:28px;padding:0 12px;font-size:11.5px}
+.btn.on{border-color:var(--acc);color:var(--acc)}
+.rbtn{width:38px;height:38px;border-radius:50%;background:var(--sur2);display:flex;align-items:center;justify-content:center;flex:none}
+.rbtn.pri{background:var(--acc);color:#14102e}
+.card{background:var(--sur);border-radius:16px;padding:12px;display:flex;align-items:center;gap:12px;flex:none}
+.card .tx{flex:1;min-width:0}
+.card .tx b{display:block;font-size:14px}
+.card .tx div{font-size:11.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px;flex:none}
+.tile{background:var(--sur);border-radius:10px;display:flex;align-items:center;gap:8px;overflow:hidden;font-weight:600;font-size:12.5px;padding-right:6px}
+.tile .cv{width:44px;height:44px;border-radius:0}
+.hs{display:flex;gap:10px;flex:none;margin-right:-16px;overflow:hidden}
+.ac{width:104px;flex:none}
+.ac .cv{width:104px;height:104px;border-radius:10px}
+.ac b{display:block;font-size:12.5px;font-weight:600;margin-top:6px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ac small{display:block;color:var(--mut);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seg{display:flex;background:var(--sur);border-radius:99px;padding:3px;flex:none;margin:4px 0 8px}
+.seg div{flex:1;text-align:center;padding:6px 0;border-radius:99px;font-size:12px;font-weight:600;color:var(--mut)}
+.seg div.on{background:var(--sur2);color:var(--tx)}
+.kicker{font-size:10.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--mut)}
+.hint{background:var(--sur);border:1px dashed #4a5068;border-radius:14px;padding:12px;flex:none}
+.hint b{display:block;font-size:13.5px}
+.hint p{color:var(--mut);font-size:12px;margin:3px 0 10px}
+
+/* ===== panel web (escritorio) ===== */
+.shot{max-width:1120px;margin:0 auto 46px}
+.shot h2{font-size:15px;font-weight:650;margin-bottom:10px}
+.shot h2 span{color:var(--acc);margin-right:6px}
+.win{border:1px solid #343949;border-radius:12px;overflow:hidden;background:var(--bg);position:relative}
+.win .ic{width:18px;height:18px}
+.win .bar{height:34px;background:#1d2029;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line)}
+.win .bar i{width:10px;height:10px;border-radius:50%;background:#3b4051}
+.win .bar .url{flex:1;max-width:420px;margin-left:10px;height:22px;border-radius:6px;background:#12141a;color:var(--mut);font-size:11.5px;display:flex;align-items:center;padding:0 10px}
+.win .app{display:grid;grid-template-columns:230px 1fr;grid-template-rows:1fr 76px;height:640px}
+.win .side{background:var(--side);border-right:1px solid var(--line);padding:16px 12px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.win .brand{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:700;margin:0 6px 14px}
+.win .brand b{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#ff6bd6,#5b2bff)}
+.win .nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;color:var(--mut);font-weight:600}
+.win .nav.on{background:var(--sur2);color:var(--tx)}
+.win .nav small{margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:var(--acc);color:#14102e;font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 5px}
+.win .side h4{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--mut);margin:16px 10px 6px;display:flex;justify-content:space-between;align-items:center}
+.win .side h4 a{color:var(--acc);font-size:16px;line-height:1}
+.win .pl{display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:8px;color:var(--tx)}
+.win .pl small{color:var(--mut);margin-left:auto}
+.win .who{margin-top:auto;display:flex;align-items:center;gap:10px;padding:8px 10px;border-top:1px solid var(--line);color:var(--mut)}
+.win .who b{width:26px;height:26px;border-radius:50%;background:var(--sur2);color:var(--tx);display:flex;align-items:center;justify-content:center;font-size:12px}
+.win .main{padding:20px 26px;overflow:hidden}
+.win .main h3{font-size:24px;font-weight:700;letter-spacing:-.3px}
+.win .banner{display:flex;align-items:center;gap:12px;background:var(--sur);border:1px solid #9d8cff77;border-radius:12px;padding:10px 14px;margin-top:12px}
+.win .banner.plain{border-color:var(--line)}
+.win .radtile{width:44px;height:44px;border-radius:10px;background:var(--sur2);display:flex;align-items:center;justify-content:center;color:var(--acc);flex:none}
+.win .btn{height:34px}
+.win .btn.out{height:30px}
+.win .sec{font-size:10.5px;font-weight:650;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;margin:18px 0 8px;display:flex;gap:10px;align-items:baseline}
+.win .sec a{color:var(--acc);text-transform:none;letter-spacing:0;font-size:12px;margin-left:auto}
+.win .ncards{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px}
+.win .ncards .wcard{min-width:0}
+.win .ncards .wcard .cv{width:100%;aspect-ratio:1;height:auto;border-radius:10px;margin-bottom:7px}
+.win .ncards .wcard b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win .ncards .wcard small{display:block;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.win .cards .wcard{background:var(--sur);border-radius:12px;padding:12px}
+.win .cards .wcard .cv{width:100%;height:84px;border-radius:10px;margin-bottom:10px}
+.win .cards .wcard .cv .ic{width:30px;height:30px}
+.win .cards .wcard b{display:block}.win .cards .wcard small{color:var(--mut)}
+.win .agrid{display:grid;grid-template-columns:repeat(6,1fr);gap:18px 14px}
+.win .agrid > div{text-align:center;min-width:0}
+.win .agrid .cv{width:112px;height:112px;margin:0 auto 8px}
+.win .agrid .cv .dot{top:6px;right:8px;width:12px;height:12px}
+.win .agrid b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win .agrid small{display:block;color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win .agrid .btn{margin-top:8px}
+.win .hero{display:flex;align-items:flex-end;gap:20px}
+.win .hero h3{font-size:32px;font-weight:750;letter-spacing:-.6px;line-height:1.1;margin-top:4px}
+.win .acts{display:flex;gap:10px;margin-top:14px;align-items:center}
+.win .back{display:flex;align-items:center;gap:6px;color:var(--mut);font-weight:600;margin-bottom:12px}
+.win .player{grid-column:1/3;background:#14161c;border-top:1px solid var(--line);display:grid;grid-template-columns:270px 1fr 270px;align-items:center;padding:0 18px;gap:16px}
+.win .now{display:flex;align-items:center;gap:12px;min-width:0}
+.win .now .cv{width:46px;height:46px}
+.win .now b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win .now small{color:var(--mut)}
+.win .ctl{display:flex;flex-direction:column;align-items:center;gap:7px}
+.win .ctl .bts{display:flex;align-items:center;gap:20px;color:var(--mut)}
+.win .ctl .bts .big{width:34px;height:34px;border-radius:50%;background:var(--acc);color:#14102e;display:flex;align-items:center;justify-content:center}
+.win .wprog{display:flex;align-items:center;gap:10px;width:100%;font-size:11px;color:var(--mut)}
+.win .wprog .tr{flex:1;height:4px;border-radius:9px;background:var(--sur2);position:relative}
+.win .wprog .tr i{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:9px;background:var(--acc)}
+.win .right{display:flex;align-items:center;justify-content:flex-end;gap:14px;color:var(--mut)}
+.win .vol{width:86px;height:4px;border-radius:9px;background:var(--sur2);position:relative}
+.win .vol i{position:absolute;left:0;top:0;bottom:0;width:70%;border-radius:9px;background:var(--mut)}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></symbol>
+  <symbol id="i-lib" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4.5" height="16" rx="1"/><rect x="13.5" y="4" width="4.5" height="16" rx="1"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 4l10 8-10 8z"/><rect x="17" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 4L9 12l10 8z"/><rect x="4.4" y="4" width="2.6" height="16" rx="1"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M3 7h4l10 10h4M3 17h4l3-3M14 10l3-3h4M18 4l3 3-3 3M18 14l3 3-3 3"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12V9a3 3 0 0 1 3-3h11M20 12v3a3 3 0 0 1-3 3H6M15 3l3 3-3 3M9 15l-3 3 3 3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24"><path d="M4 6h13M4 11h13M4 16h7"/><path d="M15 14.5l5 3-5 3z"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-radio" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+  <symbol id="i-set" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.5"/><circle cx="8" cy="17" r="2.5"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></symbol>
+</svg>
+
+<header class="top">
+  <h1>MyMusic — maqueta de artistas seguidos y novedades</h1>
+  <p>2026-11-18 · Borrador para aprobar. Es un <b>añadido</b> a las maquetas aprobadas (app, panel web, estadísticas, artista y disco), no las sustituye: solo salen las pantallas que cambian o que son nuevas. Lo nuevo va marcado en amarillo. Artistas, discos y cifras son de ejemplo.</p>
+  <ul>
+    <li><b>Qué es:</b> tres piezas. <b>«Seguir»</b> en la página del artista; <b>«Tus artistas»</b>, como tus listas pero de artistas y grupos; y <b>«Novedades de tus artistas»</b> en Inicio. Tus respuestas: «1-A los que sigo 2-Solo mostrar en la app/web en inicio, ok 3-ok». No hay avisos en el móvil.</li>
+    <li><b>De dónde salen los datos (medido hoy, <code>pruebas\medicion_novedades_20261118\INFORME.md</code>):</b> la página del artista en YouTube Music trae sus discos y sencillos del más nuevo al más viejo, pero <b>solo con el año</b>. La fecha se saca de los vídeos de sus canciones: <b>la fecha que más se repite</b> entre ellas. Acertó en 31 de 31 discos. Las otras dos reglas que probé fallaban: la de la primera canción, con las reediciones, y la de la canción más nueva, con los videoclips subidos después.</li>
+    <li><b>Qué cuenta como novedad:</b> un disco, sencillo o EP de un artista que sigues que <b>salió en los últimos 30 días</b>. También uno que <b>aparece nuevo en su página</b> aunque su fecha sea vieja (una reedición o una edición ampliada), si es de este año o del anterior; sale como «apareció hace N días». Igual que en la página del artista, sin vídeos ni directos.</li>
+    <li><b>Cuándo se mira:</b> al seguir a un artista, en segundo plano (entre medio segundo y unos 12 s según cuánto haya sacado este año; la fila se llena sola), y <b>una vez al día de madrugada</b>. Cada artista se mira una sola vez aunque lo sigáis varios. Con 100 artistas seguidos, en torno a un minuto al día de trabajo para el Flip.</li>
+    <li><b>Cada uno lo suyo:</b> a quién sigues y qué has visto es de cada usuario; los datos de los discos son comunes.</li>
+    <li><b>Lo que he decidido yo (dime si cambias algo):</b>
+      <ul>
+        <li>«Tus artistas» va como <b>pestaña dentro de Listas</b> («Listas · Artistas»); la barra de abajo sigue con tres botones. En el PC, una entrada <b>«Tus artistas»</b> en la barra lateral, debajo de Buscar.</li>
+        <li>Inicio enseña lo de los <b>últimos 30 días</b>; «Ver todas», hasta <b>3 meses</b>.</li>
+        <li>Un <b>punto morado</b> marca lo que aún no has abierto. Se quita al abrir el disco.</li>
+        <li>Abajo de «Tus artistas», <b>«Los que más escuchas»</b> (de tus estadísticas), solo para seguirlos de un toque. Nunca se sigue a nadie solo.</li>
+        <li>⚠ <b>Dejar de seguir</b> (tocar «Siguiendo» en su página, o los tres puntos en «Tus artistas») <b>no pasa por la papelera</b>: no se pierde nada y se vuelve a seguir con un toque. Es una excepción a «lo que borras va a la papelera»; si la prefieres, se añade.</li>
+        <li>Orden de «Tus artistas»: primero los que tienen algo sin abrir, del más reciente al más viejo; después, el resto por orden alfabético.</li>
+        <li>Si sigues a alguien pero nadie ha sacado nada en 30 días, la fila <b>no sale</b>. Si no sigues a nadie, sale la tarjeta de la pantalla 5.</li>
+      </ul>
+    </li>
+    <li><b>Si YouTube Music falla</b> (no tiene API oficial): la fila se queda con lo último que se leyó y el resto de la app sigue igual.</li>
+    <li><b>Panel web:</b> en el móvil, las pantallas 1-5, igual que en la app. En el PC, la 6, la 7 y la 8.</li>
+  </ul>
+</header>
+
+<h2 class="part">App Android (y panel web en el móvil)</h2>
+<div class="grid">
+
+<!-- 1 INICIO -->
+<section class="cell">
+  <h2><span>1</span>Inicio <i class="tag">CAMBIA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><h3>Inicio</h3><svg class="ic"><use href="#i-set"/></svg></div>
+      <div class="sec" style="margin-top:4px">Continuar</div>
+      <div class="card">
+        <div class="cv" style="width:52px;height:52px;border-radius:10px"></div>
+        <div class="tx"><b>breakcore</b><div>Canción 14 de 212 · 1:32</div></div>
+        <div class="rbtn pri"><svg class="ic s f"><use href="#i-play"/></svg></div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        <div class="cv" style="width:52px;height:52px;border-radius:10px;background:var(--sur2);display:flex;align-items:center;justify-content:center;color:var(--acc)"><svg class="ic"><use href="#i-radio"/></svg></div>
+        <div class="tx"><b>Tu radio</b><div>Parecidas a lo que escuchas</div></div>
+        <div class="rbtn"><svg class="ic s f"><use href="#i-play"/></svg></div>
+      </div>
+      <div class="ring" style="margin-top:14px;flex:none">
+        <div class="sec" style="margin-top:0">Novedades de tus artistas <a>Ver todas</a></div>
+        <div class="hs">
+          <div class="ac"><div class="cv c5"><i class="dot"></i></div><b>Low Orbit (Remixes)</b><small>Halcyon Drift</small><small>hace 5 días</small></div>
+          <div class="ac"><div class="cv c7"><i class="dot"></i></div><b>Static Bloom</b><small>Sora Kite</small><small>hace 12 días</small></div>
+          <div class="ac"><div class="cv c3"></div><b>Tunnel Vision 2</b><small>DJ Okapi</small><small>hace 27 días</small></div>
+        </div>
+      </div>
+      <div class="sec">Para ti</div>
+      <div class="hs">
+        <div class="ac"><div class="cv au au1"><svg class="ic"><use href="#i-trend"/></svg></div><b>Lo más escuchado</b><small>38 canciones</small></div>
+        <div class="ac"><div class="cv au au2"><svg class="ic"><use href="#i-clock"/></svg></div><b>Hace tiempo que no suena</b><small>50 canciones</small></div>
+        <div class="ac"><div class="cv au au3"><svg class="ic"><use href="#i-radio"/></svg></div><b>Descubierto en la radio</b><small>17 canciones</small></div>
+      </div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap"><b>«Novedades de tus artistas»</b> va entre «Tu radio» y «Para ti»: lo que han sacado en los últimos 30 días, lo más nuevo primero, en una fila que se desliza de lado. Cada tarjeta lleva carátula, título, artista y cuándo salió. El <b>punto</b> marca lo que aún no has abierto. Tocar una abre el disco (la pantalla de disco ya existe: Reproducir, Guardar, corazón en cada canción). «Ver todas» abre la pantalla 4. Lo demás de Inicio no cambia.</p>
+</section>
+
+<!-- 2 ARTISTA: SEGUIR -->
+<section class="cell">
+  <h2><span>2</span>Artista: «Seguir» <i class="tag">CAMBIA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><span style="flex:1"></span></div>
+      <div style="text-align:center;flex:none">
+        <div class="cv c4 av" style="width:96px;height:96px;margin:0 auto"></div>
+        <div style="font-size:22px;font-weight:750;letter-spacing:-.4px;margin-top:10px">Halcyon Drift</div>
+        <div class="mut" style="font-size:12px">4,1 M de oyentes al mes</div>
+        <div class="ring" style="display:inline-block;margin-top:10px"><div class="btn out">Seguir</div></div>
+      </div>
+      <div style="display:flex;gap:8px;margin:14px 0 2px;flex:none">
+        <div class="btn pri" style="flex:1"><svg class="ic s f"><use href="#i-play"/></svg>Reproducir</div>
+        <div class="btn"><svg class="ic s"><use href="#i-radio"/></svg>Radio</div>
+      </div>
+      <div class="sec">Canciones más escuchadas <a>Ver todas · 87</a></div>
+      <div class="row"><span class="mut" style="width:16px;text-align:right;font-size:12px">1</span><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Glass Engine · 4:05</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="mut" style="width:16px;text-align:right;font-size:12px">2</span><div class="cv c2"></div><div class="t"><b>Night Bus to Ceres</b><small>Paper Satellites · 3:48</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><span class="mut" style="width:16px;text-align:right;font-size:12px">3</span><div class="cv c8"></div><div class="t"><b>Saltwater Static</b><small>Blue Hour Machines · 4:31</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div class="on"><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Un botón <b>«Seguir»</b> bajo los oyentes. Al tocarlo pasa a <b>«✓ Siguiendo»</b> (en morado) y el artista entra en «Tus artistas»; tocarlo otra vez deja de seguirlo. Lo demás de la página del artista no cambia.</p>
+</section>
+
+<!-- 3 TUS ARTISTAS -->
+<section class="cell">
+  <h2><span>3</span>Listas → «Artistas» <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><h3>Listas</h3></div>
+      <div class="seg ring"><div>Listas · 9</div><div class="on">Artistas · 6</div></div>
+      <div class="row"><div class="cv c4 av" style="width:48px;height:48px"><i class="dot"></i></div><div class="t"><b>Halcyon Drift</b><small class="nw">Nuevo: Low Orbit (Remixes) · hace 5 días</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c5 av" style="width:48px;height:48px"><i class="dot"></i></div><div class="t"><b>Sora Kite</b><small class="nw">Nuevo: Static Bloom · hace 12 días</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c8 av" style="width:48px;height:48px"></div><div class="t"><b>DJ Okapi</b><small>Último: Tunnel Vision 2 · 22 oct</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c6 av" style="width:48px;height:48px"></div><div class="t"><b>Kettle Drift</b><small>Último: Amen, Sister · 2025</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="row"><div class="cv c7 av" style="width:48px;height:48px"></div><div class="t"><b>Mira Vantablack</b><small>Último: Soft Reset · 2024</small></div><svg class="ic"><use href="#i-more"/></svg></div>
+      <div class="sec">Los que más escuchas</div>
+      <div class="row"><div class="cv c2 av" style="width:40px;height:40px"></div><div class="t"><b>Lowlight Club</b><small>23 escuchas en 30 días</small></div><div class="btn out sm">Seguir</div></div>
+      <div class="row"><div class="cv c3 av" style="width:40px;height:40px"></div><div class="t"><b>Hollow Arcade</b><small>18 escuchas en 30 días</small></div><div class="btn out sm">Seguir</div></div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div class="on"><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">En Listas, dos pestañas: <b>«Listas»</b> (como hasta ahora) y <b>«Artistas»</b>. Cada artista seguido con su foto y, debajo, <b>lo último que ha sacado</b> (en morado y con punto si es nuevo y no lo has abierto). Tocar uno abre su página. Los tres puntos: «Radio de este artista» y «Dejar de seguir». Al final, <b>«Los que más escuchas»</b> y aún no sigues, con su «Seguir».</p>
+</section>
+
+<!-- 4 VER TODAS -->
+<section class="cell">
+  <h2><span>4</span>«Ver todas»: novedades <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><svg class="ic"><use href="#i-back"/></svg><span class="ttl">Novedades de tus artistas</span></div>
+      <div class="sec" style="margin-top:4px">Esta semana</div>
+      <div class="row"><div class="cv c5" style="width:48px;height:48px"><i class="dot"></i></div><div class="t"><b>Low Orbit (Remixes)</b><small>Halcyon Drift · EP · 13 nov</small></div></div>
+      <div class="row"><div class="cv c6" style="width:48px;height:48px"><i class="dot"></i></div><div class="t"><b>Kettle Songs (Ed. ampliada)</b><small>Kettle Drift · Álbum · apareció hace 3 días</small></div></div>
+      <div class="sec">Este mes</div>
+      <div class="row"><div class="cv c7" style="width:48px;height:48px"><i class="dot"></i></div><div class="t"><b>Static Bloom</b><small>Sora Kite · Álbum · 6 nov</small></div></div>
+      <div class="row"><div class="cv c3" style="width:48px;height:48px"></div><div class="t"><b>Tunnel Vision 2</b><small>DJ Okapi · Sencillo · 22 oct</small></div></div>
+      <div class="sec">Hasta 3 meses</div>
+      <div class="row"><div class="cv c2" style="width:48px;height:48px"></div><div class="t"><b>Night Bus (Live)</b><small>Halcyon Drift · Sencillo · 2 oct</small></div></div>
+      <div class="row"><div class="cv c8" style="width:48px;height:48px"></div><div class="t"><b>Soft Reset (Remastered)</b><small>Mira Vantablack · Sencillo · 9 sep</small></div></div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Lo de los últimos 3 meses, agrupado en <b>«Esta semana»</b>, <b>«Este mes»</b> y <b>«Hasta 3 meses»</b>, con tipo y fecha. Una reedición o edición ampliada dice <b>«apareció hace N días»</b> en vez de fecha, porque su fecha de salida es la del original. Tocar una fila abre el disco.</p>
+</section>
+
+<!-- 5 INICIO SIN SEGUIR A NADIE -->
+<section class="cell">
+  <h2><span>5</span>Inicio, sin seguir a nadie <i class="tag">NUEVA</i></h2>
+  <div class="ph">
+    <div class="sb"><span>12:15</span><span>5G</span></div>
+    <div class="scr">
+      <div class="bar-top"><h3>Inicio</h3><svg class="ic"><use href="#i-set"/></svg></div>
+      <div class="sec" style="margin-top:4px">Continuar</div>
+      <div class="card">
+        <div class="cv" style="width:52px;height:52px;border-radius:10px"></div>
+        <div class="tx"><b>breakcore</b><div>Canción 14 de 212 · 1:32</div></div>
+        <div class="rbtn pri"><svg class="ic s f"><use href="#i-play"/></svg></div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        <div class="cv" style="width:52px;height:52px;border-radius:10px;background:var(--sur2);display:flex;align-items:center;justify-content:center;color:var(--acc)"><svg class="ic"><use href="#i-radio"/></svg></div>
+        <div class="tx"><b>Tu radio</b><div>Parecidas a lo que escuchas</div></div>
+        <div class="rbtn"><svg class="ic s f"><use href="#i-play"/></svg></div>
+      </div>
+      <div class="ring" style="margin-top:14px;flex:none">
+        <div class="hint">
+          <b>Novedades de tus artistas</b>
+          <p>Sigue a tus artistas y aquí saldrá lo que saquen.</p>
+          <div class="btn out sm"><svg class="ic s"><use href="#i-user"/></svg>Elegir artistas</div>
+        </div>
+      </div>
+      <div class="sec">Para ti</div>
+      <div class="hs">
+        <div class="ac"><div class="cv au au1"><svg class="ic"><use href="#i-trend"/></svg></div><b>Lo más escuchado</b><small>38 canciones</small></div>
+        <div class="ac"><div class="cv au au2"><svg class="ic"><use href="#i-clock"/></svg></div><b>Hace tiempo que no suena</b><small>50 canciones</small></div>
+      </div>
+    </div>
+    <div class="mini"><div class="cv c4"></div><div class="t"><b>Glass Engine</b><small>Halcyon Drift</small></div><svg class="ic f"><use href="#i-pause"/></svg><svg class="ic f"><use href="#i-next"/></svg></div>
+    <div class="pnav"><div class="on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div><div><svg class="ic"><use href="#i-search"/></svg>Buscar</div><div><svg class="ic"><use href="#i-lib"/></svg>Listas</div></div>
+  </div>
+  <p class="cap">Mientras no sigas a nadie, en el sitio de la fila sale esta tarjeta. <b>«Elegir artistas»</b> abre Listas → Artistas (pantalla 3), donde ya salen «Los que más escuchas» para seguirlos de un toque. En cuanto sigues a uno, la tarjeta desaparece.</p>
+</section>
+
+</div>
+
+<h2 class="part">Panel web en el PC</h2>
+
+<!-- 6 INICIO WEB -->
+<section class="shot">
+  <h2><span>6</span>Inicio <i class="tag">CAMBIA</i></h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><b></b>MyMusic</div>
+        <div class="nav on"><svg class="ic"><use href="#i-home"/></svg>Inicio</div>
+        <div class="nav"><svg class="ic"><use href="#i-search"/></svg>Buscar</div>
+        <div class="nav ring"><svg class="ic"><use href="#i-user"/></svg>Tus artistas<small>3</small></div>
+        <h4>Tus listas <a>+</a></h4>
+        <div class="pl">likes<small>487</small></div>
+        <div class="pl">breakcore<small>212</small></div>
+        <div class="pl">para currar<small>86</small></div>
+        <div class="pl">coche<small>140</small></div>
+        <div class="pl">city pop<small>54</small></div>
+        <div class="who"><b>I</b>iker · Ajustes</div>
+      </aside>
+      <main class="main">
+        <h3>Inicio</h3>
+        <div class="banner">
+          <div class="cv" style="width:44px;height:44px"></div>
+          <div style="flex:1"><b>Continuar: breakcore</b><div class="mut">Canción 14 de 212 · 1:32 · estaba sonando en tu Pocophone</div></div>
+          <div class="btn pri"><svg class="ic f" style="width:14px;height:14px"><use href="#i-play"/></svg>Continuar aquí</div>
+        </div>
+        <div class="banner plain">
+          <div class="radtile"><svg class="ic"><use href="#i-radio"/></svg></div>
+          <div style="flex:1"><b>Tu radio</b><div class="mut">Canciones parecidas a lo que escuchas, sin repetir las tuyas</div></div>
+          <div class="btn"><svg class="ic f" style="width:14px;height:14px"><use href="#i-play"/></svg>Escuchar</div>
+        </div>
+        <div class="ring" style="margin-top:4px;padding:0 2px 2px">
+          <div class="sec">Novedades de tus artistas <a>Ver todas</a></div>
+          <div class="ncards">
+            <div class="wcard"><div class="cv c5"><i class="dot"></i></div><b>Low Orbit (Remixes)</b><small>Halcyon Drift · hace 5 días</small></div>
+            <div class="wcard"><div class="cv c6"><i class="dot"></i></div><b>Kettle Songs (Ed. ampliada)</b><small>Kettle Drift · apareció hace 3 días</small></div>
+            <div class="wcard"><div class="cv c7"><i class="dot"></i></div><b>Static Bloom</b><small>Sora Kite · hace 12 días</small></div>
+            <div class="wcard"><div class="cv c3"></div><b>Tunnel Vision 2</b><small>DJ Okapi · hace 27 días</small></div>
+          </div>
+        </div>
+        <div class="sec">Para ti</div>
+        <div class="cards">
+          <div class="wcard"><div class="cv au au1"><svg class="ic"><use href="#i-trend"/></svg></div><b>Lo más escuchado</b><small>38 canciones · últimos 30 días</small></div>
+          <div class="wcard"><div class="cv au au2"><svg class="ic"><use href="#i-clock"/></svg></div><b>Hace tiempo que no suena</b><small>50 canciones · cambia cada día</small></div>
+          <div class="wcard"><div class="cv au au3"><svg class="ic"><use href="#i-radio"/></svg></div><b>Descubierto en la radio</b><small>17 canciones · 9 sin guardar</small></div>
+        </div>
+      </main>
+      <footer class="player">
+        <div class="now"><div class="cv c4"></div><div style="min-width:0"><b class="mut">Nada sonando</b><small>Elige una lista o busca una canción</small></div></div>
+        <div class="ctl"><div class="bts"><svg class="ic"><use href="#i-shuffle"/></svg><svg class="ic f"><use href="#i-prev"/></svg><div class="big"><svg class="ic f"><use href="#i-play"/></svg></div><svg class="ic f"><use href="#i-next"/></svg><svg class="ic"><use href="#i-repeat"/></svg></div><div class="wprog"><span>0:00</span><div class="tr"></div><span>0:00</span></div></div>
+        <div class="right"><svg class="ic"><use href="#i-queue"/></svg><svg class="ic"><use href="#i-vol"/></svg><div class="vol"><i></i></div></div>
+      </footer>
+    </div>
+  </div>
+  <p class="cap">En el PC, <b>«Novedades de tus artistas»</b> va entre «Tu radio» y «Para ti», en una fila de hasta seis carátulas (aquí hay cuatro). En la barra lateral, debajo de Buscar, la entrada nueva <b>«Tus artistas»</b>, con el número de novedades sin abrir. Los artistas <b>no</b> se mezclan con «Tus listas».</p>
+</section>
+
+<!-- 7 TUS ARTISTAS WEB -->
+<section class="shot">
+  <h2><span>7</span>«Tus artistas» <i class="tag">NUEVA</i></h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div class="app" style="height:560px">
+      <aside class="side">
+        <div class="brand"><b></b>MyMusic</div>
+        <div class="nav"><svg class="ic"><use href="#i-home"/></svg>Inicio</div>
+        <div class="nav"><svg class="ic"><use href="#i-search"/></svg>Buscar</div>
+        <div class="nav on"><svg class="ic"><use href="#i-user"/></svg>Tus artistas<small>3</small></div>
+        <h4>Tus listas <a>+</a></h4>
+        <div class="pl">likes<small>487</small></div>
+        <div class="pl">breakcore<small>212</small></div>
+        <div class="pl">para currar<small>86</small></div>
+        <div class="who"><b>I</b>iker · Ajustes</div>
+      </aside>
+      <main class="main">
+        <h3>Tus artistas</h3>
+        <div class="mut" style="margin-top:2px">6 artistas · 3 novedades sin abrir</div>
+        <div class="agrid" style="margin-top:16px">
+          <div><div class="cv c4 av"><i class="dot"></i></div><b>Halcyon Drift</b><small class="nw">Nuevo: Low Orbit (Remixes)</small></div>
+          <div><div class="cv c6 av"><i class="dot"></i></div><b>Kettle Drift</b><small class="nw">Nuevo: Kettle Songs (Ed. ampliada)</small></div>
+          <div><div class="cv c5 av"><i class="dot"></i></div><b>Sora Kite</b><small class="nw">Nuevo: Static Bloom</small></div>
+          <div><div class="cv c8 av"></div><b>DJ Okapi</b><small>Último: Tunnel Vision 2</small></div>
+          <div><div class="cv c7 av"></div><b>Mira Vantablack</b><small>Último: Soft Reset · 2024</small></div>
+          <div><div class="cv c3 av"></div><b>Nine Volt Choir</b><small>Último: Static Lullaby · 2022</small></div>
+        </div>
+        <div class="sec" style="margin-top:22px">Los que más escuchas</div>
+        <div class="agrid">
+          <div><div class="cv c2 av" style="width:88px;height:88px"></div><b>Lowlight Club</b><small>23 escuchas en 30 días</small><div class="btn out">Seguir</div></div>
+          <div><div class="cv c3 av" style="width:88px;height:88px"></div><b>Hollow Arcade</b><small>18 escuchas en 30 días</small><div class="btn out">Seguir</div></div>
+          <div><div class="cv c7 av" style="width:88px;height:88px"></div><b>Paper Wolves</b><small>11 escuchas en 30 días</small><div class="btn out">Seguir</div></div>
+        </div>
+      </main>
+      <footer class="player">
+        <div class="now"><div class="cv c4"></div><div style="min-width:0"><b>Glass Engine</b><small>Halcyon Drift</small></div></div>
+        <div class="ctl"><div class="bts"><svg class="ic"><use href="#i-shuffle"/></svg><svg class="ic f"><use href="#i-prev"/></svg><div class="big"><svg class="ic f"><use href="#i-pause"/></svg></div><svg class="ic f"><use href="#i-next"/></svg><svg class="ic"><use href="#i-repeat"/></svg></div><div class="wprog"><span>1:32</span><div class="tr"><i></i></div><span>4:05</span></div></div>
+        <div class="right"><svg class="ic"><use href="#i-queue"/></svg><svg class="ic"><use href="#i-vol"/></svg><div class="vol"><i></i></div></div>
+      </footer>
+    </div>
+  </div>
+  <p class="cap">Una rejilla con los artistas que sigues, en el mismo orden que en el móvil, y debajo «Los que más escuchas» con su «Seguir». Tocar un artista abre su página; con el botón derecho (o los tres puntos al pasar el ratón), «Radio de este artista» y «Dejar de seguir».</p>
+</section>
+
+<!-- 8 ARTISTA WEB: SEGUIR -->
+<section class="shot">
+  <h2><span>8</span>Artista: «Seguir» <i class="tag">CAMBIA</i></h2>
+  <div class="win">
+    <div class="bar"><i></i><i></i><i></i><div class="url">mymusic.example.com</div></div>
+    <div style="padding:18px 26px 22px">
+      <div class="back"><svg class="ic"><use href="#i-back"/></svg>Volver</div>
+      <div class="hero">
+        <div class="cv c4 av" style="width:120px;height:120px"></div>
+        <div>
+          <div class="kicker">Artista</div>
+          <h3>Halcyon Drift</h3>
+          <div class="mut">4,1 M de oyentes al mes</div>
+          <div class="acts">
+            <div class="btn pri"><svg class="ic f" style="width:14px;height:14px"><use href="#i-play"/></svg>Reproducir</div>
+            <div class="btn"><svg class="ic" style="width:16px;height:16px"><use href="#i-radio"/></svg>Radio de este artista</div>
+            <div class="ring"><div class="btn out on"><svg class="ic" style="width:15px;height:15px"><use href="#i-check"/></svg>Siguiendo</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="cap">Solo cambia la cabecera de la página del artista: un tercer botón, <b>«Seguir»</b>, que pasa a <b>«✓ Siguiendo»</b> (aquí ya seguido). Lo de debajo (canciones, parecidos, discos) sigue igual que en la maqueta de artista y disco.</p>
+</section>
+
+</body>
+</html>

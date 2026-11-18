@@ -126,6 +126,7 @@ object MmIcons {
 
     // Artista y disco (mockups/artista-disco-v1.html)
     val User = line(dot(12f, 8f, 4f), "M4 21a8 8 0 0 1 16 0")
+    val Check = line("M5 12.5l4.5 4.5L19 7.5")
 
     // Canciones que fallan (mockups/fallos-v1.html)
     val Retry = line("M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4")

@@ -570,3 +570,35 @@ table.albumt td.m,table.albumt th.m{width:40px}
 .linkrow .in{flex:1;min-width:0;margin:0}
 .m .pick.fail{cursor:pointer}
 .m .pick.fail .btn.sm{display:none}
+
+/* ---------- artistas que sigues y novedades (§21, mockups/novedades-v1.html) ---------- */
+.btn.out{background:transparent;border:1px solid #4a5068}
+.btn.out.on{border-color:var(--acc);color:var(--acc)}
+.btn.sm{height:30px;padding:0 12px;font-size:12px}
+.m .btn.sm{height:32px}
+.followm{margin-top:10px}
+.nav .count{margin-left:auto;min-width:18px;height:18px;border-radius:99px;background:var(--acc);color:var(--onacc);font-size:10.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 5px}
+.dot{position:absolute;top:6px;right:6px;width:10px;height:10px;border-radius:50%;background:var(--acc);box-shadow:0 0 0 2px var(--bg);pointer-events:none}
+.rel.nov{position:relative}
+.cvw{position:relative;flex:none}
+.cvw .dot{top:-1px;right:-1px}
+.nw{color:var(--acc) !important}
+.hintcard{background:var(--sur);border:1px dashed #4a5068;border-radius:14px;padding:12px 14px;margin-top:14px}
+.hintcard b{display:block}
+.hintcard p{color:var(--mut);font-size:12.5px;margin:3px 0 10px}
+.tabseg{display:flex;background:var(--sur);border-radius:99px;padding:3px;margin:6px 0 8px}
+.tabseg button{flex:1;padding:7px 0;border-radius:99px;font-size:12.5px;font-weight:600;color:var(--mut)}
+.tabseg button.on{background:var(--sur2);color:var(--tx)}
+.fgrid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:18px 14px;margin-top:16px}
+.fcard{text-align:center;min-width:0;cursor:pointer;position:relative}
+.fcard .cvw{width:112px;margin:0 auto 8px}
+.fcard .cv{width:112px;height:112px;margin:0 auto}
+.fcard .cvw .dot{top:6px;right:8px;width:12px;height:12px}
+.fcard b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fcard small{display:block;color:var(--mut);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fcard:hover b{color:var(--acc)}
+.fcard .more{position:absolute;top:0;right:0;opacity:0}
+.fcard:hover .more,.fcard .more:focus-visible{opacity:1}
+.fgrid.sug .cv{width:88px;height:88px;margin-bottom:8px}
+.fcard .btn{margin-top:8px}
+.m .row > .btn.sm{flex:none}

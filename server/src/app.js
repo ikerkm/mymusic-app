@@ -10,6 +10,7 @@ import { Listening, artistOf, isAutoKind, isPeriod } from './stats.js';
 import { note, who } from './usage.js';
 import { explain } from './ytdlp.js';
 import { ALBUM_ID, ARTIST_ID } from './ytmusic.js';
+import { ALL_DAYS, DAY_MS, NEW_DAYS } from './follows.js';
 import { NO_MATCH, reasonOf } from './failures.js';
 import { cleanTitle } from './matches.js';
 
@@ -52,7 +53,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, ytmusic = null, alternates = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, artistsWaitMs = 4000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, ytmusic = null, releases = null, alternates = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, artistsWaitMs = 4000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -484,7 +485,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             if (!page) return res.status(404).json({ error: 'artist_not_found' });
             const { songs, related, ...rest } = page;
             // Sus 5 más escuchadas son las primeras de su lista entera («Ver todas»), que va de más a menos escuchada
-            res.json({ artist: { ...rest, related: related.map(artistCard), songsCount: songs.length, top: songs.slice(0, 5).map(showFor(req.ctx)) } });
+            res.json({ artist: { ...rest, related: related.map(artistCard), songsCount: songs.length, top: songs.slice(0, 5).map(showFor(req.ctx)), following: req.ctx.follows.has(req.params.id) } });
         } catch (error) {
             ytmFailed(res, error, `artista ${req.params.id}`);
         }
@@ -507,6 +508,8 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         try {
             const album = await ytmusic.album(req.params.id);
             if (!album) return res.status(404).json({ error: 'album_not_found' });
+            // Novedades (§21): abrir el disco quita su punto de «nuevo»
+            if (releases?.knows(req.params.id)) req.ctx.follows.markSeen(req.params.id);
             res.json({ album: { ...album, count: album.tracks.length, durationSec: totalSec(album.tracks), tracks: album.tracks.map(showFor(req.ctx)) } });
         } catch (error) {
             ytmFailed(res, error, `disco ${req.params.id}`);
@@ -551,6 +554,114 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         const artists = found.map(result => (result.status === 'fulfilled' ? result.value : null))
             .filter(artist => artist && !seen.has(artist.id) && seen.add(artist.id));
         res.json({ names, artists: artists.map(artistCard) });
+    });
+
+    // --- Artistas que sigues y sus novedades (§21, mockups/novedades-v1.html) ---
+    // A quién sigue cada uno y qué ha abierto es suyo (follows.json); lo que saca cada artista es común
+    // (releases.json) y se mira al seguirlo y una vez al día desde las 4. Sin avisos: solo se enseña en
+    // Inicio y en «Tus artistas» (decisión del usuario, 18-11).
+    const needWatch = (req, res, next) => (ytmusic && releases ? next() : res.status(404).json({ error: 'not_found' }));
+    const novedadOf = (req, item) => ({
+        id: item.release.id,
+        title: item.release.title,
+        kind: item.release.kind,
+        year: item.release.year ?? null,
+        thumb: item.release.thumb ?? null,
+        artist: item.artist,
+        when: item.when,                    // 'AAAA-MM-DD': cuándo salió o, si `appeared`, cuándo apareció
+        appeared: item.appeared,            // reedición o edición ampliada: «apareció hace N días»
+        seen: req.ctx.follows.isSeen(item.release.id),
+    });
+    const unseenOf = req => releases.novedades(req.ctx.follows.ids(), { days: NEW_DAYS }).filter(item => !req.ctx.follows.isSeen(item.release.id)).length;
+
+    // «Tus artistas»: con novedad sin abrir primero (la más reciente arriba); el resto, por orden alfabético
+    priv.get('/follows', needWatch, (req, res) => {
+        const follows = req.ctx.follows;
+        const fresh = releases.novedades(follows.ids(), { days: NEW_DAYS }).map(item => novedadOf(req, item));
+        const newest = new Map();
+        for (const item of fresh) if (!newest.has(item.artist.id)) newest.set(item.artist.id, item);
+        const artists = follows.list().map(followed => {
+            const entry = releases.entry(followed.id);
+            const novedad = newest.get(followed.id) ?? null;
+            const last = novedad ? null : releases.latestOf(followed.id);
+            const latest = novedad
+                ? { id: novedad.id, title: novedad.title, kind: novedad.kind, year: novedad.year, when: novedad.when, appeared: novedad.appeared }
+                : last ? { id: last.id, title: last.title, kind: last.kind, year: last.year ?? null, when: last.date ?? null, appeared: false } : null;
+            return {
+                id: followed.id,
+                name: entry?.name ?? followed.name,
+                thumb: followed.thumb ?? entry?.thumb ?? null,
+                followedAt: followed.at,
+                latest,
+                isNew: Boolean(novedad && !novedad.seen),
+            };
+        });
+        artists.sort((a, b) => {
+            if (a.isNew !== b.isNew) return a.isNew ? -1 : 1;
+            if (a.isNew && a.latest.when !== b.latest.when) return a.latest.when < b.latest.when ? 1 : -1;
+            return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+        });
+        res.json({ artists, unseen: fresh.filter(item => !item.seen).length });
+    });
+
+    // «Seguir»: lee su página (si no se ha mirado en el último día); las fechas de lo reciente siguen en segundo plano
+    priv.put('/follows/:id', needWatch, async (req, res) => {
+        const { id } = req.params;
+        if (!ARTIST_ID.test(id)) return res.status(400).json({ error: 'bad_id' });
+        let entry = releases.entry(id);
+        if (!entry?.checkedAt || releases.now() - Date.parse(entry.checkedAt) > DAY_MS) {
+            const job = releases.check(id);
+            try {
+                entry = await releases.page(id);
+            } catch (error) {
+                return ytmFailed(res, error, `seguir a ${id}`);
+            }
+            if (!entry) return res.status(404).json({ error: 'artist_not_found' });
+            job.catch(error => log(`[novedades] fechas de ${entry.name}: ${String(error?.message ?? error).slice(0, 160)}`));
+        }
+        const followed = req.ctx.follows.follow({ id, name: entry.name, thumb: entry.thumb });
+        if (!followed) return res.status(400).json({ error: 'too_many' });
+        log(`[novedades] ${req.user.name} sigue a ${followed.name}`);
+        res.json({ artist: { id, name: followed.name, thumb: followed.thumb }, following: true });
+    });
+
+    // «Dejar de seguir»: sin papelera (no se pierde nada; se vuelve a seguir con un toque; aprobado en la maqueta)
+    priv.delete('/follows/:id', needWatch, (req, res) => {
+        if (!ARTIST_ID.test(req.params.id)) return res.status(400).json({ error: 'bad_id' });
+        if (req.ctx.follows.unfollow(req.params.id)) log(`[novedades] ${req.user.name} deja de seguir a ${releases.entry(req.params.id)?.name ?? req.params.id}`);
+        res.json({ following: false });
+    });
+
+    // «Los que más escuchas» (últimos 30 días) y aún no sigue, ya con su artista de YouTube Music
+    priv.get('/follows/suggestions', needWatch, async (req, res) => {
+        const top = listeningOf(req).stats('30').topArtists;
+        let timer;
+        const late = new Promise(resolve => { timer = setTimeout(() => resolve(null), artistsWaitMs); });
+        const found = await Promise.all(top.map(artist => Promise.race([ytmusic.findArtist(artist.name).catch(() => null), late])));
+        clearTimeout(timer);
+        const seen = new Set();
+        const artists = [];
+        found.forEach((artist, i) => {
+            if (!artist || seen.has(artist.id) || req.ctx.follows.has(artist.id)) return;
+            seen.add(artist.id);
+            artists.push({ ...artistCard(artist), plays: top[i].plays });
+        });
+        res.json({ artists: artists.slice(0, 5) });
+    });
+
+    // Novedades: Inicio pide 30 días y «Ver todas», 90. `unseen` cuenta siempre las de 30 días sin abrir.
+    priv.get('/novedades', needWatch, (req, res) => {
+        const days = String(req.query.days ?? '') === String(ALL_DAYS) ? ALL_DAYS : NEW_DAYS;
+        const follows = req.ctx.follows;
+        const items = releases.novedades(follows.ids(), { days }).map(item => novedadOf(req, item));
+        res.json({ days, following: follows.ids().length, unseen: days === NEW_DAYS ? items.filter(item => !item.seen).length : unseenOf(req), releases: items });
+    });
+
+    // Quitar el punto de «nuevo» (las apps lo piden al abrir una novedad, aunque el disco ya lo tuvieran leído)
+    priv.post('/novedades/:id/seen', needWatch, (req, res) => {
+        if (!ALBUM_ID.test(req.params.id)) return res.status(400).json({ error: 'bad_id' });
+        if (releases.knows(req.params.id)) req.ctx.follows.markSeen(req.params.id);
+        res.json({ unseen: unseenOf(req) });
     });
 
     // --- Sesión de escucha ---

@@ -101,9 +101,13 @@ fun ListsScreen(vm: AppViewModel) {
     var creating by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<ListSummary?>(null) }
 
+    // Artistas que sigues (§21): con un servidor que sabe seguir, dos pestañas
+    val withArtists = vm.follows != null
+    if (withArtists && vm.listsTab == "artists") return FollowsTab(vm)
     Box(Modifier.fillMaxSize()) {
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             item { ScreenTitle("Listas") }
+            if (withArtists) item { ListsTabs(vm) }
             if (vm.lists.isEmpty()) {
                 item { Text("Todavía no tienes listas. Crea la primera con «Nueva lista».", color = Mm.Mut, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp)) }
             }

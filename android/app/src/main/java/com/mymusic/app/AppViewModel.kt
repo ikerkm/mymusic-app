@@ -23,11 +23,15 @@ import com.mymusic.app.data.AutoDetail
 import com.mymusic.app.data.AutoHome
 import com.mymusic.app.data.Entry
 import com.mymusic.app.data.FailureItem
+import com.mymusic.app.data.FollowSuggestion
+import com.mymusic.app.data.Follows
 import com.mymusic.app.data.ImportPreview
 import com.mymusic.app.data.LikeResult
 import com.mymusic.app.data.ListDetail
 import com.mymusic.app.data.ListSummary
 import com.mymusic.app.data.MatchInfo
+import com.mymusic.app.data.Novedad
+import com.mymusic.app.data.Novedades
 import com.mymusic.app.data.Prefs
 import com.mymusic.app.data.ProbeResult
 import com.mymusic.app.data.SessionView
@@ -69,6 +73,8 @@ sealed interface Overlay {
     data class Album(val id: String) : Overlay
     /** «Canciones que fallaron» (§19), desde Ajustes. */
     data object Failures : Overlay
+    /** «Ver todas» las novedades de tus artistas (§21): los últimos 3 meses. */
+    data object Novedades : Overlay
 }
 
 /** En qué punto está la actualización de la app. */
@@ -205,6 +211,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var saveAlbumFor by mutableStateOf<AlbumPage?>(null)               // disco que se está guardando como lista
     var artistRadioStarting by mutableStateOf<String?>(null)           // id del artista cuya radio se está buscando
         private set
+
+    // --- Artistas que sigues y novedades (§21, mockups/novedades-v1.html) ---
+    var novedades by mutableStateOf<Novedades?>(null)                 // Inicio (30 días); null = servidor anterior o aún sin leer
+        private set
+    var novedadesAll by mutableStateOf<Novedades?>(null)              // «Ver todas» (90 días)
+        private set
+    var novedadesAllError by mutableStateOf<String?>(null)
+        private set
+    var follows by mutableStateOf<Follows?>(null)                     // «Tus artistas»
+        private set
+    var followSuggestions by mutableStateOf<List<FollowSuggestion>>(emptyList())   // «Los que más escuchas»
+        private set
+    var followBusy by mutableStateOf<Set<String>>(emptySet())         // artistas con «Seguir» / «Dejar de seguir» en curso
+        private set
+    var listsTab by mutableStateOf("lists")                           // pestaña de Listas: lists | artists
+    var showArtists by mutableStateOf(false)                          // pide a la pantalla principal ir a Listas → Artistas
 
     // --- Canciones que fallan (§19, mockups/fallos-v1.html) ---
     var failures by mutableStateOf<List<FailureItem>?>(null)          // null = aún sin leer
@@ -376,6 +398,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         failureFor = null
         alternateFor = null
         alternateOptions = null
+        novedades = null
+        novedadesAll = null
+        follows = null
+        followSuggestions = emptyList()
+        followBusy = emptySet()
+        listsTab = "lists"
         loginError = message
         loggedIn = false
     }
@@ -400,7 +428,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is Overlay.Artist -> loadArtist(overlay.id)
             is Overlay.Discography -> loadArtist(overlay.id)
             is Overlay.ArtistSongs -> loadArtistSongs(overlay.id)
-            is Overlay.Album -> loadAlbum(overlay.id)
+            is Overlay.Album -> {
+                loadAlbum(overlay.id)
+                markNovedadSeenHere(overlay.id)               // el servidor lo apunta al leer el disco
+            }
+            Overlay.Novedades -> loadNovedadesAll()
         }
     }
 
@@ -425,6 +457,83 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { api.radio() }.onSuccess { radioOn = it }
         // Ni a las listas automáticas: «Para ti» no sale
         forYou = runCatching { api.autoHome() }.getOrNull()
+        // Ni a seguir artistas (§21): sin fila de novedades ni pestaña «Artistas»
+        refreshFollowing()
+    }
+
+    // ------------------------------------------------------------------ artistas que sigues y novedades (§21)
+
+    private suspend fun refreshFollowing() {
+        novedades = runCatching { api.novedades() }.getOrNull()
+        follows = runCatching { api.follows() }.getOrNull()
+    }
+
+    /** Pestaña Listas → «Artistas»: los que sigue y «Los que más escuchas». */
+    fun loadFollowsTab() {
+        viewModelScope.launch { runCatching { api.follows() }.onSuccess { follows = it } }
+        viewModelScope.launch { runCatching { api.followSuggestions() }.onSuccess { followSuggestions = it } }
+    }
+
+    private fun loadNovedadesAll() {
+        novedadesAllError = null
+        viewModelScope.launch {
+            try {
+                novedadesAll = api.novedades(90)
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED) else novedadesAllError = "No se han podido leer las novedades. Prueba otra vez en un rato."
+            } catch (e: Exception) {
+                novedadesAllError = "Sin conexión con el servidor."
+            }
+        }
+    }
+
+    /** Seguir o dejar de seguir (sin papelera: no se pierde nada y se vuelve a seguir con un toque). */
+    fun setFollow(id: String, name: String, on: Boolean) {
+        if (id in followBusy) return
+        followBusy = followBusy + id
+        viewModelScope.launch {
+            try {
+                if (on) api.follow(id) else api.unfollow(id)
+                artistPages[id]?.let { artistPages[id] = it.copy(following = on) }
+                if (on) followSuggestions = followSuggestions.filterNot { it.id == id }
+                notice = if (on) "Sigues a $name" else "Has dejado de seguir a $name"
+                refreshFollowing()
+                // Las fechas de lo reciente llegan en unos segundos: entonces la fila de Inicio se llena (sin
+                // dejar el botón ocupado mientras tanto)
+                if (on) viewModelScope.launch {
+                    delay(8_000)
+                    refreshFollowing()
+                }
+            } catch (e: ApiException) {
+                if (e.status == 401) logout(EXPIRED) else notice = if (on) "No se pudo seguir. Prueba otra vez." else "No se pudo dejar de seguir. Prueba otra vez."
+            } catch (e: Exception) {
+                notice = "Sin conexión con el servidor."
+            } finally {
+                followBusy = followBusy - id
+            }
+        }
+    }
+
+    /** Tocar una novedad: abre su disco y le quita el punto. */
+    fun openNovedad(item: Novedad) {
+        if (!item.seen) viewModelScope.launch { runCatching { api.markNovedadSeen(item.id) } }
+        open(Overlay.Album(item.id))
+    }
+
+    private fun markNovedadSeenHere(id: String) {
+        novedades = novedades?.let { n ->
+            val rows = n.releases.map { if (it.id == id) it.copy(seen = true) else it }
+            n.copy(releases = rows, unseen = rows.count { !it.seen })
+        }
+        novedadesAll = novedadesAll?.let { n -> n.copy(releases = n.releases.map { if (it.id == id) it.copy(seen = true) else it }) }
+        follows = follows?.let { f -> f.copy(artists = f.artists.map { if (it.latest?.id == id) it.copy(isNew = false) else it }) }
+    }
+
+    /** «Elegir artistas» (Inicio sin seguir a nadie): Listas → Artistas. */
+    fun pickArtists() {
+        overlays.clear()
+        listsTab = "artists"
+        showArtists = true
     }
 
     // ------------------------------------------------------------------ listas automáticas y estadísticas

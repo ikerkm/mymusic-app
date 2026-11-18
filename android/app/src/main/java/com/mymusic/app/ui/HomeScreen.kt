@@ -81,6 +81,9 @@ fun HomeScreen(vm: AppViewModel, state: PlayerState) {
         // «Tu radio»: canciones parecidas a lo que escucha (hace falta haber escuchado algo o tener una lista)
         if (vm.lists.isNotEmpty() || vm.recent.isNotEmpty()) item { RadioCard(vm) }
 
+        // «Novedades de tus artistas» (§21): entre «Tu radio» y «Para ti»
+        item { NovedadesRow(vm) }
+
         // «Para ti»: las listas automáticas y «Tus estadísticas» (no sale si aún no hay nada)
         item { ForYouSection(vm) }
 

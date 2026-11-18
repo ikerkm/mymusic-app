@@ -14,6 +14,7 @@ import { Usage } from './usage.js';
 import { fetchPlaylist, openAudio } from './ytdlp.js';
 import { YtMusic, createYtMusicClient } from './ytmusic.js';
 import { AlternateStore } from './failures.js';
+import { ReleaseWatch } from './follows.js';
 
 dotenv.config({ path: join(config.root, '.env') });
 
@@ -38,6 +39,10 @@ const cache = new AudioCache({
 });
 // Consumo: lo que gasta cada usuario y la máquina (lo ve el dueño en el panel)
 const usage = new Usage(config.dataDir, { cache, cores: config.cores, log });
+const ytmusic = new YtMusic({ client: createYtMusicClient({ log }), log });
+const releases = new ReleaseWatch(config.dataDir, { ytmusic, log });
+// Los artistas que sigue alguien ahora mismo (para la vuelta diaria de novedades)
+const followedIds = () => auth.users().flatMap(user => stores.for(user.id).follows.ids());
 const app = createApp({
     auth,
     cache,
@@ -51,7 +56,9 @@ const app = createApp({
     pending: new PendingImports(),
     radio: new Radio({ fetchMix: async (id, limit) => (await fetchPlaylist(mixUrl(id), { limit })).entries, log }),
     // Página de artista y de disco (§18): datos de YouTube Music
-    ytmusic: new YtMusic({ client: createYtMusicClient({ log }), log }),
+    ytmusic,
+    // Artistas que sigues y sus novedades (§21): lo que saca cada artista, común a todos
+    releases,
     // «Otro enlace» de las canciones que fallan (§19): común a todos los usuarios
     alternates: new AlternateStore(config.dataDir),
     webDir: config.webDir,
@@ -66,12 +73,14 @@ const server = app.listen(config.port, config.host, () => {
     if (users.length === 0) log('[mymusic] AVISO: no hay ningún usuario. Crea el primero: node scripts/users.mjs add <nombre>');
     else log(`[mymusic] usuarios: ${users.map(user => user.name + (user.admin ? ' (dueño)' : '')).join(', ')}`);
     usage.start();
+    releases.start(followedIds);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
         log(`[mymusic] ${signal}: cerrando`);
         usage.stop();        // guarda los contadores del último minuto
+        releases.stop();
         server.close(() => process.exit(0));
         setTimeout(() => process.exit(0), 3000).unref();
     });

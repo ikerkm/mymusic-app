@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { FailureStore } from './failures.js';
+import { FollowStore } from './follows.js';
 import { ListStore } from './lists.js';
 import { RadioMemory } from './radio.js';
 import { HistoryStore, SessionStore } from './session.js';
@@ -23,7 +24,7 @@ export class UserStores {
         return join(this.dataDir, 'users', userId);
     }
 
-    /** Almacenes de un usuario: { lists, sessions, history, radio, failures }. */
+    /** Almacenes de un usuario: { lists, sessions, history, radio, failures, follows }. */
     for(userId) {
         let stores = this.cache.get(userId);
         if (!stores) {
@@ -36,6 +37,8 @@ export class UserStores {
                 radio: new RadioMemory(dir, { now: this.now }),
                 // Canciones que fallaron (§19)
                 failures: new FailureStore(dir, { now: this.now }),
+                // Artistas que sigue y novedades que ya ha abierto (§21)
+                follows: new FollowStore(dir, { now: this.now }),
             };
             this.cache.set(userId, stores);
         }

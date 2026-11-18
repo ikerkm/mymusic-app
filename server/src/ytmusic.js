@@ -18,6 +18,25 @@ export const ALBUM_ID = /^MPREb_[A-Za-z0-9_-]{5,40}$/;
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const SONGS_MAX = 500;            // canciones de un artista que se leen como mucho («Ver todas»)
 const ALBUM_TRACKS_MAX = 1000;    // canciones de un disco (las cajas enormes pasan de 200)
+const DATE_TRACKS_MAX = 40;       // canciones de un disco que se miran para saber su fecha (§21)
+const DATE_AT_ONCE = 4;           // vídeos que se preguntan a la vez para la fecha
+
+/**
+ * Fecha de salida de un disco (§21): la que más se repite entre las fechas de los vídeos de sus
+ * canciones; si empatan, la más nueva. YouTube Music solo da el año. Medido el 18-11
+ * (pruebas\medicion_novedades_20261118\INFORME.md): acierta en 31 de 31; la de la primera canción
+ * falla en las reediciones y la de la canción más nueva, con los videoclips subidos después.
+ * @param {string[]} dates fechas 'AAAA-MM-DD' (las que no lo son se ignoran)
+ * @returns {string|null}
+ */
+export function modeDate(dates) {
+    const count = new Map();
+    for (const date of dates ?? []) {
+        const day = String(date ?? '').slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(day)) count.set(day, (count.get(day) ?? 0) + 1);
+    }
+    return [...count].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? 1 : -1))[0]?.[0] ?? null;
+}
 
 // Palabras de un texto, sin tildes ni mayúsculas. Vale para cualquier alfabeto («米津玄師» es una palabra).
 export const words = text => String(text ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -112,6 +131,9 @@ export function bigThumb(url, size = 544) {
  *   searchArtists(query) → [{ id, name, listeners, thumb }]
  *   artist(id) → { id, name, image, albums, singles, related, songs, songsCount } (o null si no existe)
  *   album(id) → { id, title, kind, year, thumb, artists: [{ id, name }], tracks } (o null)
+ *   releases(id) → { id, name, releases: [{ id, title, kind, year, thumb }] } (o null): solo la página del
+ *     artista, sin «Ver todos» ni sus canciones (novedades, §21)
+ *   releaseDate(albumId) → 'AAAA-MM-DD' o null (§21)
  */
 export class YtMusic {
     constructor({ client, now = Date.now, ttlMs = DAY_MS, timeoutMs = 20_000, log = () => {} }) {
@@ -187,6 +209,38 @@ export class YtMusic {
     async album(id) {
         if (!ALBUM_ID.test(String(id ?? ''))) return null;
         return this.#cached(`d:${id}`, () => this.client.album(id));
+    }
+
+    // --- Novedades (§21). Sin guardar: lo pide la vuelta diaria, que quiere lo de hoy.
+
+    async #limited(read, ms) {
+        let timer;
+        const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('YouTube Music tarda demasiado')), ms); });
+        try {
+            return await Promise.race([read(), late]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /** Los discos, sencillos y EP de la página de un artista, del más nuevo al más viejo (solo la página). */
+    async releases(id) {
+        if (!ARTIST_ID.test(String(id ?? ''))) return null;
+        const page = await this.#limited(() => this.client.releases(id), this.timeoutMs);
+        if (page) this.#remember([{ id, name: page.name }]);
+        return page;
+    }
+
+    /** Fecha de salida de un disco (la más repetida entre sus canciones), o null. Mira hasta 40 vídeos. */
+    async releaseDate(albumId) {
+        if (!ALBUM_ID.test(String(albumId ?? ''))) return null;
+        return this.#limited(() => this.client.releaseDate(albumId), this.timeoutMs * 4);
+    }
+
+    /** Nombre y foto cuadrada de un artista si ya ha salido en una búsqueda, en «parecidos» o en su página. */
+    knownArtist(id) {
+        const known = this.known.get(id);
+        return known?.name ? { id, name: known.name, thumb: known.thumb ?? null } : null;
     }
 }
 
@@ -353,6 +407,33 @@ export function createYtMusicClient({ log = () => {} } = {}) {
                 artists,
                 tracks: rows.map(row => trackOf(row, { artists: names, thumb })).filter(Boolean),
             };
+        }),
+
+        // Novedades (§21): solo la página del artista. «Álbumes» y «Singles y EPs» vienen del más nuevo al
+        // más viejo, así que lo nuevo siempre está en lo que se ve sin «Ver todos».
+        releases: guarded(async ({ innertube }, id) => {
+            const page = await innertube.music.getArtist(id);
+            const name = text(page.header?.title).slice(0, 200);
+            if (!name) return null;
+            const releases = [];
+            for (const section of page.sections ?? []) {
+                const title = text(section.header?.title ?? section.title);
+                const kind = /^álbumes|^albums/i.test(title) ? 'album' : /^singles|^sencillos/i.test(title) ? 'single' : null;
+                if (kind) releases.push(...(section.contents ?? []).map(item => releaseOf(item, kind)).filter(Boolean));
+            }
+            return { id, name, releases: dedupeReleases(releases) };
+        }),
+
+        // La fecha de un disco: la que más se repite entre los vídeos de sus canciones (de 4 en 4)
+        releaseDate: guarded(async ({ innertube }, albumId) => {
+            const album = await innertube.music.getAlbum(albumId);
+            const ids = (album.contents ?? []).map(row => row?.id).filter(id => VIDEO_ID.test(id ?? '')).slice(0, DATE_TRACKS_MAX);
+            const dates = [];
+            for (let i = 0; i < ids.length; i += DATE_AT_ONCE) {
+                const read = await Promise.allSettled(ids.slice(i, i + DATE_AT_ONCE).map(videoId => innertube.getBasicInfo(videoId)));
+                for (const result of read) if (result.status === 'fulfilled') dates.push(String(result.value?.basic_info?.publish_date ?? ''));
+            }
+            return modeDate(dates);
         }),
     };
 }

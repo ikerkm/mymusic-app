@@ -81,10 +81,36 @@ data class ArtistPage(
     val albums: List<Release>,
     val singles: List<Release>,
     val related: List<ArtistCard>,
+    val following: Boolean? = null, // ¿lo sigue? (§21); null con un servidor anterior
 )
 
 /** «Ver todas»: la lista entera de sus canciones, de la más escuchada a la menos. */
 data class ArtistSongs(val id: String, val name: String, val count: Int, val durationSec: Int, val tracks: List<Track>)
+
+// --- Artistas que sigues y novedades (§21, mockups/novedades-v1.html) ---
+
+/**
+ * Una novedad: disco, sencillo o EP de un artista que sigue. `day` (AAAA-MM-DD) es cuándo salió o, si
+ * `appeared` (reedición o edición ampliada), cuándo apareció. `seen`: ya lo ha abierto (sin punto).
+ */
+data class Novedad(
+    val id: String, val title: String, val kind: String, val year: Int?, val thumb: String?,
+    val artistId: String, val artistName: String, val day: String, val appeared: Boolean, val seen: Boolean,
+)
+
+/** Inicio pide 30 días y «Ver todas», 90. `unseen` cuenta las de 30 días sin abrir. */
+data class Novedades(val days: Int, val following: Int, val unseen: Int, val releases: List<Novedad>)
+
+/** Lo último que ha sacado un artista que sigue (`day` null si solo se sabe el año). */
+data class LatestRelease(val id: String, val title: String, val kind: String, val year: Int?, val day: String?, val appeared: Boolean)
+
+/** Un artista de «Tus artistas». `isNew`: tiene una novedad sin abrir (`latest` es esa). */
+data class FollowedArtist(val id: String, val name: String, val thumb: String?, val latest: LatestRelease?, val isNew: Boolean)
+
+data class Follows(val artists: List<FollowedArtist>, val unseen: Int)
+
+/** «Los que más escuchas» (últimos 30 días) y aún no sigue. */
+data class FollowSuggestion(val id: String, val name: String, val thumb: String?, val plays: Int)
 
 /** Artista de un disco: `id` null si YouTube Music no lo enlaza. */
 data class ArtistRef(val id: String?, val name: String)
@@ -318,7 +344,43 @@ private fun JSONObject.toArtistPage() = ArtistPage(
     albums = optJSONArray("albums").releases(),
     singles = optJSONArray("singles").releases(),
     related = optJSONArray("related").artistCards(),
+    following = if (has("following") && !isNull("following")) optBoolean("following") else null,
 )
+
+private fun JSONObject.optYear(): Int? = if (isNull("year") || !has("year")) null else optInt("year")
+
+private fun JSONObject.toNovedades(): Novedades {
+    val rows = optJSONArray("releases") ?: JSONArray()
+    return Novedades(
+        days = optInt("days", 30),
+        following = optInt("following"),
+        unseen = optInt("unseen"),
+        releases = List(rows.length()) { i ->
+            rows.getJSONObject(i).let {
+                val artist = it.optJSONObject("artist") ?: JSONObject()
+                Novedad(
+                    it.getString("id"), it.optString("title"), it.optString("kind", "album"), it.optYear(), it.str("thumb"),
+                    artist.optString("id"), artist.optString("name"), it.optString("when"), it.optBoolean("appeared"), it.optBoolean("seen"),
+                )
+            }
+        },
+    )
+}
+
+private fun JSONObject.toFollows(): Follows {
+    val rows = optJSONArray("artists") ?: JSONArray()
+    return Follows(
+        artists = List(rows.length()) { i ->
+            rows.getJSONObject(i).let {
+                val latest = it.optJSONObject("latest")?.let { l ->
+                    LatestRelease(l.getString("id"), l.optString("title"), l.optString("kind", "album"), l.optYear(), l.str("when"), l.optBoolean("appeared"))
+                }
+                FollowedArtist(it.getString("id"), it.optString("name"), it.str("thumb"), latest, it.optBoolean("isNew"))
+            }
+        },
+        unseen = optInt("unseen"),
+    )
+}
 
 private fun JSONObject.toAlbumPage(): AlbumPage {
     val artists = optJSONArray("artists") ?: JSONArray()
@@ -636,6 +698,26 @@ class Api(private val prefs: Prefs) {
     suspend fun artistsOf(track: Track): List<ArtistCard> =
         call("GET", "/api/artists/of?key=${enc(track.key)}&title=${enc(track.title)}&artist=${enc(track.artist.orEmpty())}", readTimeoutMs = 60_000)
             .optJSONArray("artists").artistCards()
+
+    // --- Artistas que sigues y novedades (§21) ---
+
+    suspend fun novedades(days: Int = 30): Novedades = call("GET", "/api/novedades?days=$days").toNovedades()
+
+    suspend fun follows(): Follows = call("GET", "/api/follows").toFollows()
+
+    /** Tarda lo que tarde YouTube Music en encontrar a cada uno (unos segundos la primera vez). */
+    suspend fun followSuggestions(): List<FollowSuggestion> = call("GET", "/api/follows/suggestions", readTimeoutMs = 30_000).let { json ->
+        val rows = json.optJSONArray("artists") ?: JSONArray()
+        List(rows.length()) { i -> rows.getJSONObject(i).let { FollowSuggestion(it.getString("id"), it.optString("name"), it.str("thumb"), it.optInt("plays")) } }
+    }
+
+    /** «Seguir»: el servidor lee su página (las fechas de lo reciente siguen solas en el servidor). */
+    suspend fun follow(id: String) { call("PUT", "/api/follows/${enc(id)}", JSONObject(), readTimeoutMs = 60_000) }
+
+    suspend fun unfollow(id: String) { call("DELETE", "/api/follows/${enc(id)}") }
+
+    /** Quita el punto de «nuevo» de un disco. */
+    suspend fun markNovedadSeen(id: String) { call("POST", "/api/novedades/${enc(id)}/seen", JSONObject()) }
 
     suspend fun startAlbum(id: String, startKey: String?, shuffle: Boolean): SessionView =
         call("POST", "/api/session", JSONObject().put("album", id).put("startKey", startKey ?: JSONObject.NULL).put("shuffle", shuffle), readTimeoutMs = 60_000)

@@ -1284,6 +1284,134 @@ try {
         await apiCall('POST', '/logout');
     }
 
+    // 14. Artistas que sigues y novedades (mockups/novedades-v1.html): YouTube Music de verdad, escritorio y móvil.
+    // Sigue a un artista con algo reciente (por defecto Machine Girl; MYMUSIC_CHECK_FOLLOW para otro), mira
+    // Inicio, «Ver todas», el punto de «nuevo», «Tus artistas» y la pestaña «Artistas» del móvil, y al final lo
+    // deja de seguir. Empieza dejando de seguir todo lo que siga la cuenta de pruebas.
+    {
+        const P = 'novedades: ';
+        const PM = `${P}móvil: `;
+        const who = process.env.MYMUSIC_CHECK_FOLLOW ?? 'machine girl';
+        const apiCall = (method, path, body) => js(`fetch(${JSON.stringify(`/api${path}`)}, { method: ${JSON.stringify(method)}, credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-MyMusic': 'web' }, body: ${body ? JSON.stringify(JSON.stringify(body)) : 'undefined'} }).then(r => r.json())`);
+        const enter = async () => {
+            await send('Page.navigate', { url: `${base}/` });
+            const where = await until(`document.querySelector('.login input[name=username]') ? 'login' : (${text('.main h3')} === 'Inicio' && 'home')`, 15000);
+            if (where === 'login') {
+                await js(typeInto('.login input[name=username]', user));
+                await js(typeInto('.login input[name=password]', password));
+                await js(`document.querySelector('.login form').requestSubmit()`);
+            }
+            return until(`${text('.main h3')} === 'Inicio'`, 15000);
+        };
+        const visible = sel => `[...document.querySelectorAll(${JSON.stringify(sel)})].filter(e => e.offsetParent).length`;
+        const findArtist = async () => {
+            await js(typeInto('.searchbox input', who));
+            await js(press('.searchbox input', 'Enter'));
+            return until(`document.querySelectorAll('.main .acards .acard').length > 0`, 60000);
+        };
+
+        // --- Escritorio (pantallas 6-8)
+        await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+        check(`${P}entra en el escritorio`, Boolean(await enter()));
+        for (const artist of (await apiCall('GET', '/follows')).artists ?? []) await apiCall('DELETE', `/follows/${artist.id}`);
+        await send('Page.navigate', { url: `${base}/` });
+        check(`${P}sin seguir a nadie, Inicio enseña la tarjeta para elegir artistas`, Boolean(await until(`${text('.main .hintcard b')} === 'Novedades de tus artistas'`, 15000)));
+        check(`${P}la barra lateral tiene «Tus artistas»`, await js(`[...document.querySelectorAll('.side .nav')].some(n => n.textContent.startsWith('Tus artistas') && n.offsetParent)`));
+        await shot('14a_inicio_sin_seguir');
+        await js(clickText('.main .hintcard .btn', 'Elegir artistas'));
+        check(`${P}«Elegir artistas» abre «Tus artistas», vacía`, Boolean(await until(`${text('.main h3')} === 'Tus artistas' && ${text('.main .empty')}.startsWith('Aún no sigues')`, 8000)));
+        const sug = (await apiCall('GET', '/follows/suggestions')).artists ?? [];
+        check(`${P}«Los que más escuchas»: las ${sug.length} que da el servidor`, Boolean(await until(`document.querySelectorAll('.main .fgrid.sug .fcard').length === ${sug.length}`, 15000)), sug.map(a => `${a.name} (${a.plays})`).join(', ') || '(ninguna: la cuenta no tiene historial)');
+        await shot('14b_tus_artistas_vacia');
+
+        await js(clickText('.side .nav', 'Buscar'));
+        await until(`!!document.querySelector('.searchbox input')`);
+        await findArtist();
+        await js(`document.querySelector('.main .acards .acard').click()`);
+        await until(`${text('.artisthead h3')} !== ''`, 60000);
+        const artistName = await js(text('.artisthead h3'));
+        const followBtn = `[...document.querySelectorAll('.artisthead .btn.out')].find(b => b.offsetParent)`;
+        check(`${P}la página del artista tiene «Seguir», junto a la radio`, await js(`${followBtn}?.textContent === 'Seguir' && ${followBtn}.parentElement.classList.contains('acts')`), artistName);
+        await js(`${followBtn}.click()`);
+        check(`${P}«Seguir» pasa a «Siguiendo»`, Boolean(await until(`${followBtn}?.textContent === 'Siguiendo' && ${followBtn}.classList.contains('on')`, 30000)));
+        await shot('14c_artista_siguiendo');
+        const t0 = Date.now();
+        const fresh = await until(`fetch('/api/novedades', { credentials: 'same-origin' }).then(r => r.json()).then(d => d.releases.length)`, 90000, 2000);
+        check(`${P}en unos segundos hay novedades de ${artistName} (las fechas van en segundo plano)`, Boolean(fresh), `${fresh ?? 0} en ${Math.round((Date.now() - t0) / 1000)} s`);
+        const novs = await apiCall('GET', '/novedades');
+        console.log(`      ${novs.releases.map(r => `${r.title} [${r.kind} · ${r.when}${r.appeared ? ' · apareció' : ''}]`).join(' | ')}`);
+
+        await js(clickText('.side .nav', 'Inicio'));
+        const cardsShown = await until(`${visible('.main .releases.novs .rel')}`, 15000);
+        const dots = await js(`document.querySelectorAll('.main .releases.novs .rel .dot').length`);
+        check(`${P}Inicio: «Novedades de tus artistas» con ${Math.min(6, novs.releases.length)} tarjetas, su punto y el artista`,
+            cardsShown === Math.min(6, novs.releases.length) && dots === novs.releases.slice(0, 12).filter(r => !r.seen).length
+            && (await js(text('.main .releases.novs .rel small'))).startsWith(artistName), `${cardsShown} tarjetas, ${dots} puntos, «${await js(text('.main .releases.novs .rel small'))}»`);
+        check(`${P}va entre «Tu radio» y «Para ti»`, await js(`(() => { const secs = [...document.querySelectorAll('.main .sec')];
+            const n = secs.find(s => s.textContent.startsWith('Novedades')); const p = secs.find(s => s.textContent.startsWith('Para ti')); const r = document.querySelector('.main .banner.radio');
+            return Boolean(n) && (!r || Boolean(r.compareDocumentPosition(n) & 4)) && (!p || Boolean(n.compareDocumentPosition(p) & 4)); })()`));
+        check(`${P}la barra lateral dice cuántas hay sin abrir`, await js(text('.side .nav .count')) === (novs.unseen ? String(novs.unseen) : ''), `«${await js(text('.side .nav .count'))}», servidor ${novs.unseen}`);
+        await shot('14d_inicio_novedades');
+
+        const all = await apiCall('GET', '/novedades?days=90');
+        await js(clickText('.main .sec button', 'Ver todas'));
+        check(`${P}«Ver todas»: las ${all.releases.length} de los últimos 3 meses, por grupos`, Boolean(await until(`document.querySelectorAll('.main .releases.all.novs .rel').length === ${all.releases.length}`, 15000)),
+            await js(`[...document.querySelectorAll('.main .sec')].map(s => s.textContent).join(' | ')`));
+        await shot('14e_ver_todas');
+        const first = all.releases[0];
+        await js(`document.querySelector('.main .releases.all.novs .rel').click()`);
+        check(`${P}tocar una novedad abre su disco`, Boolean(await until(`${text('.albumhead h3')} === ${JSON.stringify(first.title)}`, 60000)), first.title);
+        const after = await until(`fetch('/api/novedades?days=90', { credentials: 'same-origin' }).then(r => r.json()).then(d => d.releases.find(r => r.id === ${JSON.stringify(first.id)})?.seen && d)`, 10000);
+        check(`${P}y el servidor lo apunta como visto`, Boolean(after), after ? `${after.unseen} sin abrir` : '');
+        await js('history.back()');
+        check(`${P}al volver, esa tarjeta ya no lleva punto`, Boolean(await until(`(() => { const c = document.querySelector('.main .releases.all.novs .rel'); return c && !c.querySelector('.dot'); })()`, 8000)));
+
+        await js(clickText('.side .nav', 'Tus artistas'));
+        check(`${P}«Tus artistas»: ${artistName} con lo último que ha sacado`, Boolean(await until(`document.querySelectorAll('.main .fgrid:not(.sug) .fcard').length === 1 && ${text('.main .fgrid:not(.sug) .fcard b')} === ${JSON.stringify(artistName)}`, 15000)),
+            await js(text('.main .fgrid:not(.sug) .fcard small')));
+        await js(`document.querySelector('.main .fgrid:not(.sug) .fcard').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 400, clientY: 300 }))`);
+        const menu = await until(`[...document.querySelectorAll('.menu button')].map(b => b.textContent).join(' | ')`, 5000);
+        check(`${P}con el botón derecho: «Radio de este artista» y «Dejar de seguir»`, menu === 'Radio de este artista | Dejar de seguir', menu ?? '(sin menú)');
+        await shot('14f_tus_artistas');
+        await js(`document.querySelector('.main h3').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+
+        // --- Móvil (pantallas 1-5)
+        await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+        await send('Page.navigate', { url: `${base}/` });
+        await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        const mCards = await until(`${visible('.main .releases.novs .rel')}`, 15000);
+        check(`${PM}Inicio: la fila de novedades, con artista y fecha en dos líneas`, mCards > 0
+            && await js(`[...document.querySelector('.main .releases.novs .rel').querySelectorAll('small')].filter(s => s.offsetParent).length`) === 2 && await js(fits),
+            await js(`[...document.querySelector('.main .releases.novs .rel').querySelectorAll('small')].filter(s => s.offsetParent).map(s => s.textContent).join(' / ')`));
+        await shot('m14a_inicio');
+        await tap(byText('.side .nav', 'Listas'));
+        check(`${PM}Listas tiene las pestañas «Listas» y «Artistas · 1»`, Boolean(await until(`${text('.tabseg')}.includes('Artistas · 1')`, 8000)), await js(text('.tabseg')));
+        await tap(byText('.tabseg button', 'Artistas'));
+        check(`${PM}«Artistas»: ${artistName} con lo último`, Boolean(await until(`${text('.main .rows .row b')} === ${JSON.stringify(artistName)}`, 8000)) && await js(fits), await js(text('.main .rows .row small')));
+        await shot('m14b_artistas');
+        await tap(q('.main .rows .row .ib'));
+        const sheet = await until(`[...document.querySelectorAll('.sheet .opt')].map(o => o.textContent).join(' | ')`, 5000);
+        check(`${PM}los tres puntos: «Radio de este artista» y «Dejar de seguir»`, sheet === 'Radio de este artista | Dejar de seguir', sheet ?? '(sin hoja)');
+        await shot('m14c_menu');
+        await tap(byText('.sheet .opt', 'Dejar de seguir'));
+        check(`${PM}«Dejar de seguir» lo quita de la pestaña`, Boolean(await until(`${text('.main .empty')}.startsWith('Aún no sigues')`, 10000)));
+        check(`${P}y el servidor ya no lo tiene`, ((await apiCall('GET', '/follows')).artists ?? []).length === 0);
+        await tap(byText('.side .nav', 'Inicio'));
+        check(`${PM}Inicio vuelve a la tarjeta de elegir artistas`, Boolean(await until(`${text('.main .hintcard b')} === 'Novedades de tus artistas'`, 10000)) && await js(fits));
+        await shot('m14d_inicio_sin_seguir');
+        await tap(byText('.side .nav', 'Buscar'));
+        await until(`!!document.querySelector('.searchbox input')`);
+        await findArtist();
+        await tap(q('.main .acards .acard'));
+        await until(`${text('.artisthead h3')} !== ''`, 60000);
+        check(`${PM}en la página del artista, «Seguir» va bajo los oyentes`, await js(`(() => { const b = [...document.querySelectorAll('.artisthead .btn.out')].find(x => x.offsetParent); return b?.textContent === 'Seguir' && b.classList.contains('followm'); })()`) && await js(fits));
+        await shot('m14e_artista');
+        await apiCall('POST', '/logout');
+    }
+
     // Respuestas que la propia prueba provoca y el navegador apunta en la consola: no son fallos
     const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/, /status of 403 .*\/api\/usage/,
         // sección 13: los vídeos inventados no se pueden sacar (502), y preguntar por un fallo que no existe da 404

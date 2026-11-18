@@ -68,6 +68,13 @@ fun MainScreen(vm: AppViewModel) {
             vm.showSearch = false
         }
     }
+    // «Elegir artistas» en Inicio lleva a Listas → Artistas (§21)
+    LaunchedEffect(vm.showArtists) {
+        if (vm.showArtists) {
+            tab = Tab.Lists
+            vm.showArtists = false
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Mm.Bg)) {
         when {
@@ -87,6 +94,7 @@ fun MainScreen(vm: AppViewModel) {
                         is Overlay.Discography -> DiscographyScreen(vm, top.id, top.tab)
                         is Overlay.Album -> AlbumScreen(vm, top.id, state)
                         Overlay.Failures -> FailuresScreen(vm)
+                        Overlay.Novedades -> NovedadesScreen(vm)
                         else -> when (tab) {
                             Tab.Home -> HomeScreen(vm, state)
                             Tab.Search -> SearchScreen(vm, playingKey = state.track?.key)

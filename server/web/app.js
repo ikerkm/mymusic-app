@@ -250,6 +250,12 @@ const st = {
     queue: { open: false, entries: [], count: 0, limit: 30 },
     full: false,                 // reproductor a pantalla completa (pantalla estrecha)
     radio: false,                // la casilla «Radio» del usuario (se recuerda en el servidor)
+    // Artistas que sigues y novedades (§21). null = el servidor no sabe (versión anterior); undefined = aún sin leer
+    novedades: undefined,        // GET /novedades (30 días, Inicio)
+    novedadesAll: null,          // GET /novedades?days=90 («Ver todas»)
+    novedadesAllError: null,
+    follows: undefined,          // GET /follows («Tus artistas»)
+    suggestions: null,           // «Los que más escuchas»
 };
 
 // ---------------------------------------------------------------- reproductor
@@ -1769,10 +1775,13 @@ function renderSide() {
     const view = st.view;
     ui.side.replaceChildren(
         h('div.brand', null, h('img.brandimg', { src: 'icon-192.png', alt: '' }), 'MyMusic'),
-        h('button.nav', { type: 'button', class: ['home', 'history', 'auto', 'stats'].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
+        h('button.nav', { type: 'button', class: ['home', 'history', 'auto', 'stats', 'novedades'].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
         h('button.nav', { type: 'button', class: ['search', ...ARTIST_VIEWS].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'search' }) }, icon('search'), 'Buscar'),
+        // Artistas que sigues (§21): en el escritorio, aquí; en pantalla estrecha, la pestaña «Artistas» dentro de Listas
+        st.novedades !== null && h('button.nav.only-d', { type: 'button', class: view.name === 'artists' ? 'on' : '', onclick: () => go({ name: 'artists' }) },
+            icon('user'), 'Tus artistas', st.novedades?.unseen ? h('small.count', null, String(st.novedades.unseen)) : null),
         // En pantalla estrecha no hay barra lateral: las listas son la tercera pestaña
-        h('button.nav.only-m', { type: 'button', class: view.name === 'lists' || view.name === 'list' ? 'on' : '', onclick: () => go({ name: 'lists' }) }, icon('lib'), 'Listas'),
+        h('button.nav.only-m', { type: 'button', class: ['lists', 'list', 'artists'].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'lists' }) }, icon('lib'), 'Listas'),
         h('h4', null, 'Tus listas', h('button', { type: 'button', title: 'Nueva lista', onclick: () => run(createList, 'No se pudo crear la lista.') }, '+')),
         h('div.pls', null, st.lists.map(list => h('button.pl', {
             type: 'button', class: view.name === 'list' && view.id === list.id ? 'on' : '', onclick: () => go({ name: 'list', id: list.id }),
@@ -1900,8 +1909,14 @@ function go(view, { push = true } = {}) {
     st.view = view;
     renderSide();
     renderMain();
-    if (view.name === 'home') Promise.all([refreshLists(), refreshSession(), refreshRecent(), refreshAuto()]).then(() => st.view === view && renderMain()).catch(() => {});
-    if (view.name === 'lists') refreshLists().then(() => st.view === view && renderMain()).catch(() => {});
+    if (view.name === 'home') Promise.all([refreshLists(), refreshSession(), refreshRecent(), refreshAuto(), refreshNovedades()]).then(() => st.view === view && renderMain()).catch(() => {});
+    if (view.name === 'lists') Promise.all([refreshLists(), refreshFollows()]).then(() => st.view === view && renderMain()).catch(() => {});
+    if (view.name === 'artists') {
+        refreshFollows().then(() => st.view === view && renderMain()).catch(() => {});
+        refreshSuggestions().then(() => st.view === view && renderMain()).catch(() => {});
+    }
+    if (view.name === 'novedades') loadNovedadesAll();
+    if (view.name === 'album') markNovedadSeen(view.id);
     if (view.name === 'list') loadList(view.id).catch(() => toast('No se pudo abrir la lista.'));
     if (view.name === 'history') loadHistory().catch(() => toast('No se pudo leer el historial.'));
     if (view.name === 'auto') loadAuto(view.id).catch(() => toast('No se pudo abrir la lista.'));
@@ -1947,6 +1962,7 @@ function renderMain() {
     const build = {
         home: viewHome, search: viewSearch, lists: viewLists, list: viewList, history: viewHistory, auto: viewAuto, stats: viewStats,
         artist: viewArtist, artistSongs: viewArtistSongs, discography: viewDiscography, album: viewAlbum,
+        artists: viewFollows, novedades: viewNovedades,
     }[st.view.name] ?? viewHome;
     if (st.view.name === 'search' && ui.main.querySelector('.searchbox')) return renderSearchResults();     // sin tocar lo que se está escribiendo
     ui.main.replaceChildren(...build().flat(Infinity).filter(Boolean));
@@ -1973,6 +1989,7 @@ function viewHome() {
             h('div.tx', null, h('b', null, 'Tu radio'), h('div.mut', null, radioStarting ? 'Buscando canciones parecidas…'
                 : [h('span.only-d', null, 'Canciones parecidas a lo que escuchas, sin repetir las tuyas'), h('span.only-m', null, 'Parecidas a lo que escuchas')])),
             h('button.btn', { type: 'button', title: 'Escuchar tu radio', disabled: radioStarting, onclick: startHomeRadio }, icon('play', 'f sm'), h('span.lbl', null, radioStarting ? 'Buscando…' : 'Escuchar'))),
+        novedadesRow(),
         paraTi(),
         st.lists.length > 0 && [
             h('div.sec', null, 'Tus listas'),
@@ -2063,6 +2080,7 @@ function listMenu(summary) {
 function viewLists() {
     return [
         h('div.top', null, h('h3', null, 'Listas')),
+        followSeg('lists'),
         st.lists.length === 0 ? h('p.empty', null, 'Todavía no tienes listas. Crea la primera con «Nueva lista».')
             : h('div.rows', null, st.lists.map(list => h('div.row', { onclick: () => go({ name: 'list', id: list.id }) },
                 listCover(list, 's48'),
@@ -2189,10 +2207,12 @@ function viewArtist() {
                 h('div.kind', null, 'Artista'),
                 h('h3', null, a.name),
                 h('div.mut', null, listenersLine(a)),
+                followToggle(a, 'only-m'),
                 h('div.acts', null,
                     h('button.btn.pri', { type: 'button', disabled: !a.songsCount, onclick: () => run(() => playArtist(a.id), 'No se pudo reproducir. Prueba otra vez.') }, icon('play', 'f sm'), 'Reproducir'),
                     h('button.btn', { type: 'button', title: 'Radio de este artista', disabled: busy || !a.songsCount, onclick: () => startArtistRadio(a.id) },
-                        icon('radio', 'sm'), busy ? 'Buscando…' : [h('span.only-d', null, 'Radio de este artista'), h('span.only-m', null, 'Radio')])))),
+                        icon('radio', 'sm'), busy ? 'Buscando…' : [h('span.only-d', null, 'Radio de este artista'), h('span.only-m', null, 'Radio')]),
+                    followToggle(a, 'only-d')))),
         h('div.artistcols', null,
             h('div', null,
                 h('div.sec', null, 'Canciones más escuchadas', a.songsCount > 0 && h('button', { type: 'button', onclick: () => go({ name: 'artistSongs', id: a.id }) }, `Ver todas · ${a.songsCount}`)),
@@ -2415,6 +2435,227 @@ function paraTi() {
                     h('div.big', null, fmtListened(week.listenedMs)),
                     h('small', null, `${songs(week.songs ?? 0)} · ${artistsCount(week.artists ?? 0)}`)),
                 h('small', null, 'Últimos 7 días · Ver más ›'))));
+}
+
+// ---------------------------------------------------------------- artistas que sigues y novedades (§21, mockups/novedades-v1.html)
+
+// A quién sigue cada uno y qué ha abierto lo guarda el servidor; lo que saca cada artista lo mira él
+// al seguirlo y una vez al día. Sin avisos: solo Inicio, «Tus artistas» y «Ver todas».
+const followBusy = new Set();          // ids de artista con «Seguir» / «Dejar de seguir» en curso
+
+/** Días desde un día AAAA-MM-DD (local) hasta hoy, o null. */
+function dayDiff(ymd) {
+    const [y, m, d] = String(ymd ?? '').split('-').map(Number);
+    if (!y || !m || !d) return null;
+    const now = new Date();
+    return Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(y, m - 1, d)) / 86400000);
+}
+/** «hace 5 días», «ayer», «hoy»; una reedición: «apareció hace 3 días». */
+function agoOf(item) {
+    const n = dayDiff(item.when);
+    const ago = n === null ? '' : n <= 0 ? 'hoy' : n === 1 ? 'ayer' : `hace ${n} días`;
+    return item.appeared ? `apareció ${ago}` : ago;
+}
+const plays30 = n => `${n} ${n === 1 ? 'escucha' : 'escuchas'} en 30 días`;
+
+async function refreshNovedades() {
+    try {
+        st.novedades = await api('GET', '/novedades');
+    } catch (error) {
+        if (error.status === 404) st.novedades = null;       // un servidor anterior: sin novedades
+    }
+    renderSide();
+}
+async function refreshFollows() {
+    try {
+        st.follows = await api('GET', '/follows');
+        if (st.novedades) st.novedades.unseen = st.follows.unseen;
+    } catch (error) {
+        if (error.status === 404) st.follows = null;
+    }
+}
+async function refreshSuggestions() {
+    try {
+        st.suggestions = (await api('GET', '/follows/suggestions', undefined, 20000)).artists ?? [];
+    } catch {
+        st.suggestions ??= [];
+    }
+}
+async function loadNovedadesAll() {
+    st.novedadesAllError = null;
+    try {
+        st.novedadesAll = await api('GET', `/novedades?days=90`);
+    } catch (error) {
+        if (error.status !== 401) st.novedadesAllError = 'No se han podido leer las novedades. Prueba otra vez en un rato.';
+    }
+    if (st.view.name === 'novedades') renderMain();
+}
+
+/** Al abrir un disco, su punto se quita también aquí (el servidor ya lo ha apuntado). */
+function markNovedadSeen(id) {
+    let changed = false;
+    for (const data of [st.novedades, st.novedadesAll]) {
+        for (const item of data?.releases ?? []) if (item.id === id && !item.seen) { item.seen = true; changed = true; }
+    }
+    for (const artist of st.follows?.artists ?? []) if (artist.latest?.id === id && artist.isNew) { artist.isNew = false; changed = true; }
+    if (changed && st.novedades) {
+        st.novedades.unseen = st.novedades.releases.filter(item => !item.seen).length;
+        renderSide();
+    }
+}
+function openNovedad(item) {
+    if (!item.seen) {
+        markNovedadSeen(item.id);
+        api('POST', `/novedades/${enc(item.id)}/seen`).catch(() => {});
+    }
+    go({ name: 'album', id: item.id });
+}
+
+/** Seguir o dejar de seguir (sin papelera: no se pierde nada y se vuelve a seguir con un toque). */
+async function setFollow(artist, on) {
+    if (followBusy.has(artist.id)) return;
+    followBusy.add(artist.id);
+    renderMain();
+    try {
+        await api(on ? 'PUT' : 'DELETE', `/follows/${enc(artist.id)}`, undefined, 30000);
+        const page = st.pages.get(`artist:${artist.id}`);
+        if (page) page.following = on;
+        if (on) st.suggestions = (st.suggestions ?? []).filter(item => item.id !== artist.id);
+        toast(on ? `Sigues a ${artist.name}` : `Has dejado de seguir a ${artist.name}`);
+        await Promise.all([refreshFollows(), refreshNovedades()]);
+        // Las fechas de lo reciente llegan en unos segundos: entonces la fila de Inicio se llena
+        if (on) setTimeout(() => Promise.all([refreshFollows(), refreshNovedades()]).then(() => ['home', 'artists'].includes(st.view.name) && renderMain()).catch(() => {}), 8000);
+    } finally {
+        followBusy.delete(artist.id);
+        renderMain();
+    }
+}
+/** El botón «Seguir» / «✓ Siguiendo» de la página del artista (no sale si el servidor no sabe seguir). */
+function followToggle(artist, where) {
+    if (typeof artist.following !== 'boolean') return null;
+    return h('button.btn.out', {
+        type: 'button', class: `${where} ${where === 'only-m' ? 'followm sm' : ''} ${artist.following ? 'on' : ''}`, disabled: followBusy.has(artist.id),
+        onclick: () => run(() => setFollow(artist, !artist.following), artist.following ? 'No se pudo dejar de seguir. Prueba otra vez.' : 'No se pudo seguir. Prueba otra vez.'),
+    }, artist.following ? [icon('check', 'sm'), 'Siguiendo'] : 'Seguir');
+}
+function followButton(artist, small = false) {
+    return h('button.btn.out', {
+        type: 'button', class: small ? 'sm' : '', disabled: followBusy.has(artist.id),
+        onclick: event => { event.stopPropagation(); run(() => setFollow(artist, true), 'No se pudo seguir. Prueba otra vez.'); },
+    }, 'Seguir');
+}
+const followMenu = artist => [
+    { label: 'Radio de este artista', icon: 'radio', run: () => startArtistRadio(artist.id) },
+    { label: 'Dejar de seguir', icon: 'user', run: () => setFollow(artist, false) },
+];
+
+/** Debajo del nombre en «Tus artistas»: lo nuevo sin abrir (en morado) o lo último que ha sacado. */
+function followLine(artist) {
+    const latest = artist.latest;
+    if (!latest) return h('small', null, 'Sin discos en YouTube Music');
+    if (artist.isNew) return h('small.nw', null, `Nuevo: ${latest.title} · ${agoOf(latest)}`);
+    return h('small', null, `Último: ${latest.title}${latest.when ? ` · ${dayLabel(latest.when)}` : latest.year ? ` · ${latest.year}` : ''}`);
+}
+
+/** Tarjeta de una novedad. `full`: la de «Ver todas» (con tipo y fecha). */
+function novedadCard(item, full = false) {
+    const when = full && !item.appeared ? dayLabel(item.when) : agoOf(item);
+    return h('button.rel.nov', { type: 'button', title: `${item.title} · ${item.artist.name}`, onclick: () => openNovedad(item) },
+        cover(item.thumb, '', item.id), !item.seen && h('i.dot'),
+        h('b', null, item.title),
+        full ? h('small', null, [item.artist.name, KIND_LABEL[item.kind], when].filter(Boolean).join(' · '))
+            : [h('small.only-d', null, `${item.artist.name} · ${when}`), h('small.only-m', null, item.artist.name), h('small.only-m', null, when)]);
+}
+function novedadRow(item) {
+    return h('div.row', { onclick: () => openNovedad(item) },
+        h('div.cvw', null, cover(item.thumb, 's48', item.id), !item.seen && h('i.dot')),
+        h('div.t', null, h('b', null, item.title),
+            h('small', null, [item.artist.name, KIND_LABEL[item.kind], item.appeared ? agoOf(item) : dayLabel(item.when)].filter(Boolean).join(' · '))));
+}
+
+/** Inicio, entre «Tu radio» y «Para ti»: lo de los últimos 30 días; sin seguir a nadie, la tarjeta para elegir. */
+function novedadesRow() {
+    const n = st.novedades;
+    if (!n) return null;
+    if (n.following === 0) {
+        return h('div.hintcard', null,
+            h('b', null, 'Novedades de tus artistas'),
+            h('p', null, 'Sigue a tus artistas y aquí saldrá lo que saquen.'),
+            h('button.btn.out.sm', { type: 'button', onclick: () => go({ name: 'artists' }) }, icon('user', 'sm'), 'Elegir artistas'));
+    }
+    if (!n.releases?.length) return null;
+    return [
+        h('div.sec', null, 'Novedades de tus artistas', h('button', { type: 'button', onclick: () => go({ name: 'novedades' }) }, 'Ver todas')),
+        h('div.releases.novs', null, n.releases.slice(0, 12).map(item => novedadCard(item))),
+    ];
+}
+
+/** En la pestaña Listas (pantalla estrecha): «Listas · N» y «Artistas · N». */
+function followSeg(on) {
+    if (st.follows === null) return null;
+    return h('div.tabseg.only-m', null,
+        h('button', { type: 'button', class: on === 'lists' ? 'on' : '', onclick: () => on !== 'lists' && go({ name: 'lists' }) }, `Listas · ${st.lists.length}`),
+        h('button', { type: 'button', class: on === 'artists' ? 'on' : '', onclick: () => on !== 'artists' && go({ name: 'artists' }) }, `Artistas${st.follows ? ` · ${st.follows.artists.length}` : ''}`));
+}
+
+// Pantallas 3 (móvil: Listas → «Artistas») y 7 (escritorio: «Tus artistas»)
+function viewFollows() {
+    const f = st.follows;
+    const suggestions = st.suggestions ?? [];
+    const empty = h('p.empty', null, 'Aún no sigues a nadie. Toca «Seguir» en la página de un artista, o elige entre los que más escuchas.');
+    if (mobile()) {
+        return [
+            h('div.top', null, h('h3', null, 'Listas')),
+            followSeg('artists'),
+            !f ? h('p.empty', null, f === null ? 'Este servidor aún no sabe seguir artistas.' : 'Cargando…')
+                : f.artists.length === 0 ? empty
+                    : h('div.rows', null, f.artists.map(artist => h('div.row', { onclick: () => go({ name: 'artist', id: artist.id }) },
+                        h('div.cvw', null, cover(artist.thumb, 's48 av', artist.id), artist.isNew && h('i.dot')),
+                        h('div.t', null, h('b', null, artist.name), followLine(artist)),
+                        h('button.ib', { type: 'button', title: 'Más', onclick: event => { event.stopPropagation(); openMenu(0, 0, followMenu(artist)); } }, icon('more', 'f'))))),
+            suggestions.length > 0 && [
+                h('div.sec', null, 'Los que más escuchas'),
+                h('div.rows', null, suggestions.map(artist => h('div.row', { onclick: () => go({ name: 'artist', id: artist.id }) },
+                    cover(artist.thumb, 's40 av', artist.id),
+                    h('div.t', null, h('b', null, artist.name), h('small', null, plays30(artist.plays))),
+                    followButton(artist, true)))),
+            ],
+        ];
+    }
+    const menuAt = (event, artist) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openMenu(event.clientX, event.clientY, followMenu(artist));
+    };
+    return [
+        h('div.top', null, h('h3', null, 'Tus artistas')),
+        f && h('div.mut', null, [f.artists.length === 1 ? '1 artista' : `${f.artists.length} artistas`, f.unseen ? `${f.unseen} ${f.unseen === 1 ? 'novedad' : 'novedades'} sin abrir` : null].filter(Boolean).join(' · ')),
+        !f ? h('p.empty', null, f === null ? 'Este servidor aún no sabe seguir artistas.' : 'Cargando…')
+            : f.artists.length === 0 ? empty
+                : h('div.fgrid', null, f.artists.map(artist => h('div.fcard', { title: artist.name, onclick: () => go({ name: 'artist', id: artist.id }), oncontextmenu: event => menuAt(event, artist) },
+                    h('div.cvw', null, cover(artist.thumb, 'av', artist.id), artist.isNew && h('i.dot')),
+                    h('b', null, artist.name), followLine(artist),
+                    h('button.ib.more', { type: 'button', title: 'Más', onclick: event => menuAt(event, artist) }, icon('more', 'f'))))),
+        suggestions.length > 0 && [
+            h('div.sec', null, 'Los que más escuchas'),
+            h('div.fgrid.sug', null, suggestions.map(artist => h('div.fcard', { title: artist.name, onclick: () => go({ name: 'artist', id: artist.id }) },
+                cover(artist.thumb, 'av', artist.id), h('b', null, artist.name), h('small', null, plays30(artist.plays)), followButton(artist)))),
+        ],
+    ];
+}
+
+// Pantalla 4: «Ver todas», lo de los últimos 3 meses por grupos
+function viewNovedades() {
+    const n = st.novedadesAll;
+    const top = [pageTop('Volver', 'Novedades de tus artistas'), h('div.top.only-d', null, h('h3', null, 'Novedades de tus artistas'))];
+    if (!n) return [top, st.novedadesAllError ? h('p.err', null, st.novedadesAllError) : h('p.empty', null, 'Cargando…')];
+    if (!n.releases.length) return [top, h('p.empty', null, n.following === 0 ? 'Aún no sigues a nadie.' : 'Tus artistas no han sacado nada en los últimos 3 meses.')];
+    const groups = [['Esta semana', 0, 6], ['Este mes', 7, 30], ['Hasta 3 meses', 31, Infinity]];
+    return [top, groups.map(([label, from, to]) => {
+        const items = n.releases.filter(item => { const d = dayDiff(item.when) ?? 0; return d >= from && d <= to; });
+        if (!items.length) return null;
+        return [h('div.sec', null, label), mobile() ? h('div.rows', null, items.map(novedadRow)) : h('div.releases.all.novs', null, items.map(item => novedadCard(item, true)))];
+    })];
 }
 
 // Pantallas 2-4: una lista automática abierta (en el escritorio, como una lista con «Guardar como lista» en vez de «Importar»)

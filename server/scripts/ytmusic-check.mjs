@@ -45,5 +45,21 @@ if (box) {
 
 const [none] = await ms(() => ytm.findArtist('canal de letras que no es un artista 12345'));
 check(none === null, 'un nombre que no es de ningún artista → null');
+
+// Novedades (§21): la página ligera del artista y la fecha de un disco (la más repetida entre sus canciones)
+const rosalia = await ytm.findArtist('Rosalía');
+const [light, tLight] = await ms(() => ytm.releases(rosalia.id));
+check(light?.releases.length >= 8 && light.releases.every(r => /^MPREb_/.test(r.id) && r.year), `releases(Rosalía): ${light?.releases.length} lanzamientos con id y año, solo la página [${tLight} ms]`);
+console.log('  primeros:', light.releases.slice(0, 4).map(r => `${r.title} [${r.kind} ${r.year}]`).join(' | '));
+const lux = light.releases.find(r => r.title === 'LUX' && r.kind === 'album');
+if (lux) {
+    const [date, tDate] = await ms(() => ytm.releaseDate(lux.id));
+    check(date === '2025-11-06', `fecha de «LUX»: ${date} (la de su salida, no la del videoclip de febrero) [${tDate} ms]`);
+} else console.log('(no está «LUX» en la página de Rosalía para probar la fecha)');
+const machine = await ytm.findArtist('Machine Girl');
+const mg = await ytm.releases(machine.id);
+const psycho = mg.releases.find(r => r.title === 'Psychofiller');
+if (psycho) check((await ytm.releaseDate(psycho.id)) === '2026-11-13', 'fecha de «Psychofiller» (Machine Girl): 2026-11-13');
+check(ytm.knownArtist(machine.id)?.name === 'Machine Girl', 'el artista queda conocido (nombre y foto) para «Tus artistas»');
 console.log(`\n${fails === 0 ? 'Todo bien' : `${fails} comprobaciones fallidas`}`);
 process.exit(fails === 0 ? 0 : 1);
