@@ -132,6 +132,9 @@ object MmIcons {
     val Retry = line("M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4")
     val Link = line("M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1")
     val Close = line("M6 6l12 12M18 6L6 18")
+
+    // Copiar y compartir el enlace (§22)
+    val Share = line("M12 15V3M7 8l5-5 5 5M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7")
 }
 
 /** 42000 s → «11 h 40 min»; 1500 s → «25 min». */

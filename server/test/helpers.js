@@ -88,13 +88,16 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
     // «Otro enlace» de las canciones que fallan (§19)
     const { AlternateStore } = await import('../src/failures.js');
     const alternates = new AlternateStore(dir);
+    // Páginas de SoundCloud para copiar y compartir el enlace (§22)
+    const { SongLinkStore } = await import('../src/songlinks.js');
+    const songLinks = new SongLinkStore(dir);
     // Buscador de coincidencias y lectores de listas de fuera: dobles, sin red
     const matches = new MatchStore(dir, { search: matchSearch ?? (async () => []) });
     const app = createApp({
         auth, cache, open, stores, usage, appDist: new AppDist(dir), prefetchDelayMs, version: 'test',
         matches, importers: importers ?? {}, pending: new PendingImports(), webDir,
         radio: fetchMix ? new Radio({ fetchMix, mixTimeoutMs: radioTimeoutMs ?? 2000 }) : null, ...(probeTimeoutMs ? { probeTimeoutMs } : {}),
-        ytmusic, releases, alternates, ...(artistsWaitMs ? { artistsWaitMs } : {}),
+        ytmusic, releases, alternates, songLinks, ...(artistsWaitMs ? { artistsWaitMs } : {}),
         search: search ?? (async q => [{ key: 'yt:dQw4w9WgXcQ', title: `resultado de ${q}` }]),
     });
     const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
@@ -111,7 +114,7 @@ export async function startServer({ bytes = fakeAudio(40_000), openOptions = {},
         const res = await api(path, { method, token: as, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
         return { status: res.status, body: await res.json().catch(() => null) };
     };
-    return { dir, auth, owner, stores, cache, open, usage, lists, sessions, history, matches, ytmusic, releases, alternates, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
+    return { dir, auth, owner, stores, cache, open, usage, lists, sessions, history, matches, ytmusic, releases, alternates, songLinks, api, call, login, token, bytes, close: () => new Promise(resolve => server.close(resolve)) };
 }
 
 export async function collect(iterable) {

@@ -6,6 +6,7 @@ import { LikeSet } from './likes.js';
 import { cleanTrack } from './lists.js';
 import { RADIO_SEEDS, SongSet } from './radio.js';
 import { parseKey, parseLink } from './sources.js';
+import { linksFor } from './songlinks.js';
 import { Listening, artistOf, isAutoKind, isPeriod } from './stats.js';
 import { note, who } from './usage.js';
 import { explain } from './ytdlp.js';
@@ -53,7 +54,7 @@ const clientIp = req => String(req.headers['cf-connecting-ip'] ?? req.socket.rem
  * @param {(query: string) => Promise<object[]>} deps.search
  * @param {(url: string) => {stdout, meta, done, kill}} deps.open  para las pistas que no caben en memoria
  */
-export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, ytmusic = null, releases = null, alternates = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, artistsWaitMs = 4000, version = '0', log = () => {} }) {
+export function createApp({ auth, cache, search, open, stores, appDist, matches, importers, pending, radio = null, usage = null, ytmusic = null, releases = null, alternates = null, songLinks = null, webDir = null, prefetchDelayMs = 8000, probeTimeoutMs = 45_000, artistsWaitMs = 4000, version = '0', log = () => {} }) {
     const app = express();
     app.disable('x-powered-by');
     app.use(express.json({ limit: '10kb' }));
@@ -184,7 +185,9 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             // una lista no se abre aquí (se importa desde dentro de una lista propia).
             const link = importers ? await followShort(parseLink(query)) : null;
             if (link?.kind === 'sc-track') {
-                const track = cleanTrack(await importers.soundcloudTrack(link));
+                const found = await importers.soundcloudTrack(link);
+                if (found) songLinks?.rememberTracks([found]);
+                const track = cleanTrack(found);
                 return res.json({ results: track ? [shown(track)] : [] });
             }
             if (link?.kind === 'yt-video') {
@@ -1095,6 +1098,7 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
             log(`[importar] ${link.kind} ${link.id ?? `${link.user}/${link.slug}`}: ${String(error.message).slice(0, 200)}`);
             return res.status(502).json({ error: 'import_failed' });
         }
+        if (link.kind === 'sc-playlist') songLinks?.rememberTracks(found.tracks);
         const seen = new Set();
         const tracks = found.tracks.map(cleanTrack).filter(track => track && !seen.has(track.key) && seen.add(track.key));
         if (tracks.length === 0) return res.status(422).json({ error: 'empty_playlist' });
@@ -1187,6 +1191,27 @@ export function createApp({ auth, cache, search, open, stores, appDist, matches,
         matches.remember(ready.tracks);
         const { added, list: updated } = req.ctx.lists.addTracks(list.id, ready.tracks);
         res.json({ added, list: req.ctx.lists.summaryOf(updated) });
+    });
+
+    // --- Copiar y compartir el enlace de una canción (§22) ---
+    // El de lo que suena; en las de Spotify, además el de Spotify. La página de una canción de SoundCloud
+    // se busca la primera vez (unos segundos) y queda apuntada para todos.
+    priv.get('/links/:key', async (req, res) => {
+        const source = parseKey(req.params.key);
+        if (!source) return res.status(400).json({ error: 'bad_key' });
+        try {
+            const links = await linksFor(source.key, {
+                alternates,
+                matches,
+                store: songLinks,
+                soundcloudLink: id => importers.soundcloudLink(id),
+            });
+            if (links.length === 0) return res.status(502).json({ error: 'link_failed' });
+            res.json({ links });
+        } catch (error) {
+            log(`[enlace] ${source.key}: ${String(error?.message ?? error).slice(0, 200)}`);
+            res.status(502).json({ error: 'link_failed' });
+        }
     });
 
     // --- Fase 3: coincidencia en YouTube de una canción de Spotify ---

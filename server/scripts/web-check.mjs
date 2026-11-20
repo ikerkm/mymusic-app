@@ -1412,6 +1412,178 @@ try {
         await apiCall('POST', '/logout');
     }
 
+    // 15. Copiar y compartir el enlace (§22): YouTube, Spotify (sus dos enlaces) y SoundCloud (su página, que
+    // el servidor busca con yt-dlp de verdad). El portapapeles se lee de vuelta; «Compartir» se observa
+    // sustituyendo navigator.share (el de verdad abriría la ventana del sistema). Escritorio, móvil y reproductor.
+    {
+        const P = 'enlace: ';
+        const PM = `${P}móvil: `;
+        const apiCall = (method, path, body) => js(`fetch(${JSON.stringify(`/api${path}`)}, { method: ${JSON.stringify(method)}, credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', 'X-MyMusic': 'web' }, body: ${body ? JSON.stringify(JSON.stringify(body)) : 'undefined'} }).then(r => r.json())`);
+        const RICK = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+        const SP_ID = '4uLU6hMCjMI75M1A2tKUQC';
+        const SP_URL = `https://open.spotify.com/track/${SP_ID}`;
+        const SC_PAGE = 'https://soundcloud.com/forss/flickermood';
+        const YT_URL = /^https:\/\/www\.youtube\.com\/watch\?v=[A-Za-z0-9_-]{11}$/;
+        const rick = { key: 'yt:dQw4w9WgXcQ', platform: 'youtube', title: 'Never Gonna Give You Up', artist: 'Rick Astley', durationSec: 213, thumb: null };
+        const sc = { key: 'sc:293', platform: 'soundcloud', title: 'Flickermood', artist: 'Forss', durationSec: 214, thumb: null };
+        const stubShare = `(() => { window.__shared = []; Object.defineProperty(navigator, 'share', { configurable: true, value: async data => { window.__shared.push(data); } }); return true; })()`;
+        const lastShared = `(window.__shared ?? []).at(-1)`;
+        const clip = 'navigator.clipboard.readText()';
+        const clear = () => js(`navigator.clipboard.writeText('-').then(() => true)`);
+        const enter = async () => {
+            await send('Page.navigate', { url: `${base}/` });
+            const where = await until(`document.querySelector('.login input[name=username]') ? 'login' : (${text('.main h3')} === 'Inicio' && 'home')`, 15000);
+            if (where === 'login') {
+                await js(typeInto('.login input[name=username]', user));
+                await js(typeInto('.login input[name=password]', password));
+                await js(`document.querySelector('.login form').requestSubmit()`);
+                await until(`${text('.main h3')} === 'Inicio'`, 15000);
+            }
+        };
+
+        await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+        await send('Browser.grantPermissions', { origin: base, permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] });
+        // Sin ventana, la página no tiene el foco y el navegador no deja tocar el portapapeles: se simula
+        await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+        await enter();
+
+        // La de Spotify se busca por su enlace (así queda apuntada para su coincidencia, como al importar)
+        const sp = (await apiCall('GET', `/search?q=${encodeURIComponent(SP_URL)}`)).results?.[0] ?? null;
+        check(`${P}la canción de Spotify de prueba se encuentra`, sp?.key === `sp:${SP_ID}`, sp?.key ?? '(nada)');
+        const name = `zz prueba enlace ${Date.now() % 100000}`;
+        const { list } = await apiCall('POST', '/lists', { name });
+        for (const track of [rick, sp, sc].filter(Boolean)) await apiCall('POST', `/lists/${list.id}/tracks`, { track });
+        await js('location.reload()');
+        await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        await js(clickText('.side .pl', name));
+        await until(`document.querySelectorAll('.main tbody tr').length === ${sp ? 3 : 2}`, 8000);
+        await js(stubShare);
+
+        const rowMenu = async key => {
+            await js(`[...document.querySelectorAll('.main tbody tr')].find(r => r.dataset.key === ${JSON.stringify(key)})?.querySelector('.ib[title="Más"]').click()`);
+            return until(`!!document.querySelector('.menu') && [...document.querySelectorAll('.menu button')].map(b => b.textContent.trim())`, 5000);
+        };
+        const copyFrom = async (key, label, ms = 15000) => {
+            await clear();
+            await rowMenu(key);
+            await js(clickText('.menu button', label));
+            return until(`${clip}.then(t => t !== '-' && t)`, ms);
+        };
+
+        // YouTube
+        const ytLabels = await rowMenu(rick.key);
+        check(`${P}el menú de una de YouTube tiene «Copiar enlace» y «Compartir…»`, ytLabels?.includes('Copiar enlace') && ytLabels?.includes('Compartir…') && !ytLabels.includes('Copiar enlace de Spotify'), (ytLabels ?? []).join(' | '));
+        await shot('15a_menu_enlace');
+        await js(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+        await sleep(200);
+        const ytCopied = await copyFrom(rick.key, 'Copiar enlace');
+        check(`${P}«Copiar enlace» deja el vídeo de YouTube en el portapapeles`, ytCopied === RICK, ytCopied ?? '(nada)');
+        check(`${P}y avisa`, (await js(text('.toast'))).includes('Enlace copiado'), await js(text('.toast')));
+
+        // Spotify: los dos enlaces
+        if (sp) {
+            const spLabels = await rowMenu(sp.key);
+            check(`${P}el de una de Spotify tiene los dos enlaces`, spLabels?.includes('Copiar enlace de Spotify') && spLabels?.includes('Copiar enlace de YouTube') && !spLabels.includes('Copiar enlace'), (spLabels ?? []).join(' | '));
+            await js(`document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`);
+            await sleep(200);
+            const spCopied = await copyFrom(sp.key, 'Copiar enlace de Spotify');
+            check(`${P}«Copiar enlace de Spotify»`, spCopied === SP_URL, spCopied ?? '(nada)');
+            const spYt = await copyFrom(sp.key, 'Copiar enlace de YouTube', 60000);
+            check(`${P}«Copiar enlace de YouTube» da el vídeo desde el que suena`, YT_URL.test(spYt ?? ''), spYt ?? '(nada)');
+        }
+
+        // SoundCloud: su página, buscada por el servidor la primera vez
+        await clear();
+        await rowMenu(sc.key);
+        await js(clickText('.menu button', 'Copiar enlace'));
+        const scGot = await until(`${clip}.then(t => (t !== '-' && t) || (document.querySelector('.modal .linkin')?.value ? 'ventana: ' + document.querySelector('.modal .linkin').value : null))`, 90000, 500);
+        check(`${P}en una de SoundCloud, su página pública`, scGot === SC_PAGE || scGot === `ventana: ${SC_PAGE}`, scGot ?? '(nada)');
+        if (String(scGot).startsWith('ventana')) await js(clickText('.modal .btn', 'Cerrar'));
+
+        // Compartir: el enlace y el nombre de la canción
+        await rowMenu(rick.key);
+        await js(clickText('.menu button', 'Compartir…'));
+        const shared = await until(`${lastShared}`, 8000);
+        check(`${P}«Compartir…» manda el enlace con el título`, shared?.url === RICK && String(shared?.title).startsWith('Never Gonna Give You Up'), JSON.stringify(shared));
+        if (sp) {
+            await rowMenu(sp.key);
+            await js(clickText('.menu button', 'Compartir…'));
+            const picks = await until(`[...document.querySelectorAll('.modal h2')].some(e => e.textContent === 'Compartir') && [...document.querySelectorAll('.modal .pick')].map(p => p.textContent.trim())`, 5000);
+            check(`${P}en una de Spotify, «Compartir…» pregunta cuál de los dos`, JSON.stringify(picks) === JSON.stringify(['Enlace de Spotify', 'Enlace de YouTube']), JSON.stringify(picks));
+            await shot('15b_compartir_spotify');
+            await js('(window.__shared = [], true)');
+            await js(clickText('.modal .pick', 'Enlace de YouTube'));
+            const sharedYt = await until(`${lastShared}?.url`, 30000);
+            check(`${P}y comparte el elegido`, YT_URL.test(sharedYt ?? ''), sharedYt ?? '(nada)');
+        }
+
+        // Si el navegador no deja copiar: ventana con el enlace y sus botones
+        await js(`(() => { Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: () => Promise.reject(new Error('sin permiso')) }); document.execCommand = () => false; return true; })()`);
+        await rowMenu(rick.key);
+        await js(clickText('.menu button', 'Copiar enlace'));
+        const fallback = await until(`[...document.querySelectorAll('.modal h2')].some(e => e.textContent === 'Enlace de la canción') && document.querySelector('.modal .linkin')?.value`, 5000);
+        check(`${P}si no deja copiar, enseña el enlace en una ventana`, fallback === RICK, fallback ?? '(no sale)');
+        check(`${P}con «Copiar», «Compartir» y «Cerrar»`, await js(`JSON.stringify([...document.querySelectorAll('.modal .acts .btn')].map(b => b.textContent)) === JSON.stringify(['Cerrar', 'Compartir', 'Copiar'])`));
+        await shot('15c_ventana_enlace');
+        await js(clickText('.modal .btn', 'Cerrar'));
+
+        // Móvil: en la hoja de la canción, con sus iconos
+        await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+        await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+        await js('location.reload()');
+        await until(`${text('.main h3')} === 'Inicio'`, 15000);
+        await js(stubShare);
+        await tap(byText('.side .nav', 'Listas'));
+        await until(`${text('.main h3')} === 'Listas' && !!${byText('.main .row', name)}`, 8000);
+        await tap(`${byText('.main .row', name)}.querySelector('.t')`);
+        await until(`document.querySelectorAll('.main .row[data-key]').length === ${sp ? 3 : 2}`, 8000);
+        const sheetOf = async key => {
+            await tap(`[...document.querySelectorAll('.main .row[data-key]')].find(r => r.dataset.key === ${JSON.stringify(key)}).querySelector('.ib[title="Más"]')`);
+            return until(`!!document.querySelector('.sheet .opt') && [...document.querySelectorAll('.sheet .opt')].map(o => o.textContent.trim())`, 5000);
+        };
+        const mLabels = await sheetOf(rick.key);
+        check(`${PM}la hoja tiene «Copiar enlace» y «Compartir…» con sus iconos`, mLabels?.includes('Copiar enlace') && mLabels?.includes('Compartir…')
+            && await js(`!!${byText('.sheet .opt', 'Copiar enlace')}.querySelector('use[href="#i-link"]') && !!${byText('.sheet .opt', 'Compartir')}.querySelector('use[href="#i-share"]')`), (mLabels ?? []).join(' | '));
+        check(`${PM}cabe en la pantalla`, await js(fits));
+        await shot('m15a_hoja_enlace');
+        await clear();
+        await tap(byText('.sheet .opt', 'Copiar enlace'));
+        const mCopied = await until(`${clip}.then(t => t !== '-' && t)`, 8000);
+        check(`${PM}«Copiar enlace» con el dedo`, mCopied === RICK, mCopied ?? '(nada)');
+        if (sp) {
+            await sheetOf(sp.key);
+            await tap(byText('.sheet .opt', 'Compartir'));
+            await until(`!!document.querySelector('.modal .pick')`, 5000);
+            await shot('m15b_compartir_spotify');
+            await tap(byText('.modal .pick', 'Enlace de Spotify'));
+            const mShared = await until(`${lastShared}?.url`, 8000);
+            check(`${PM}«Compartir…» de una de Spotify, eligiendo el de Spotify`, mShared === SP_URL, mShared ?? '(nada)');
+        }
+
+        // Desde el reproductor: su menú también lo tiene
+        await tap(`[...document.querySelectorAll('.main .row[data-key]')].find(r => r.dataset.key === ${JSON.stringify(rick.key)}).querySelector('.t')`);
+        await until(`!!document.querySelector('.mini').offsetParent && ${text('.mini b')}.length > 0`, 90000, 500);
+        await tap(q('.mini .t'));
+        await until(`!!${shown('.full')}`, 5000);
+        await tap(q('.full .top .ib[title="Más"]'));
+        const fLabels = await until(`!!document.querySelector('.sheet .opt') && [...document.querySelectorAll('.sheet .opt')].map(o => o.textContent.trim())`, 5000);
+        check(`${PM}el menú del reproductor tiene «Copiar enlace»`, fLabels?.includes('Copiar enlace') && !fLabels.includes('Reproducir'), (fLabels ?? []).join(' | '));
+        await shot('m15c_reproductor_enlace');
+        await clear();
+        await tap(byText('.sheet .opt', 'Copiar enlace'));
+        const fCopied = await until(`${clip}.then(t => t !== '-' && t)`, 8000);
+        check(`${PM}y copia el de la que suena`, fCopied === RICK, fCopied ?? '(nada)');
+        await js(`${A}?.pause()`);
+
+        // Limpieza: la lista de prueba, a la papelera
+        await apiCall('DELETE', `/lists/${list.id}`);
+        await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+        await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+        await apiCall('POST', '/logout');
+    }
+
     // Respuestas que la propia prueba provoca y el navegador apunta en la consola: no son fallos
     const expected = [/status of 401 .*\/api\/(me|login)/, /status of 409 .*\/api\/session\//, /status of 400 .*\/api\/import\/preview/, /status of 403 .*\/api\/usage/,
         // sección 13: los vídeos inventados no se pueden sacar (502), y preguntar por un fallo que no existe da 404

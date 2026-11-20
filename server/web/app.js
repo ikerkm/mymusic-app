@@ -889,6 +889,8 @@ function trackMenu(track, { listId = null, play, auto = false }) {
         items.push({ label: several ? 'Ir al artista…' : 'Ir al artista', icon: 'user', note: several ? null : artistShown(track), run: () => goArtistOf(track) });
     }
     if (track.key.startsWith('sp:') && !auto) items.push({ label: 'Cambiar coincidencia…', icon: 'swap', run: () => openMatch(track) });
+    // Copiar y compartir el enlace (§22)
+    items.push('sep', ...linkItems(track));
     if (listId) {
         items.push('sep', {
             label: 'Quitar de la lista', icon: 'bin', danger: true,
@@ -899,6 +901,137 @@ function trackMenu(track, { listId = null, play, auto = false }) {
             },
         });
     }
+    return items;
+}
+
+// ---------------------------------------------------------------- copiar y compartir el enlace (§22)
+// El enlace es el de lo que suena (YouTube o la página de SoundCloud); en las de Spotify, además el de
+// Spotify. Lo da el servidor y se pide nada más abrir el menú: Safari solo deja copiar o compartir en el
+// mismo toque, y así al tocar la opción suele estar listo. Si no lo estaba y el navegador no deja, se
+// enseña el enlace en una ventana con sus botones (otro toque, ya con el enlace a mano).
+
+const PLATFORM_NAME = { youtube: 'YouTube', spotify: 'Spotify', soundcloud: 'SoundCloud' };
+const LINKS_FRESH_MS = 5 * 60_000;
+const linkCache = new Map();
+const canShare = () => typeof navigator.share === 'function';
+
+class NoLink extends Error {}
+
+/** Los enlaces de una canción: { links } cuando ya están, y `promise` mientras tanto. */
+function linksOf(track) {
+    const cached = linkCache.get(track.key);
+    if (cached && Date.now() - cached.at < LINKS_FRESH_MS) return cached;
+    const entry = { at: Date.now(), links: null };
+    entry.promise = api('GET', `/links/${enc(track.key)}`, null, 60_000)
+        .then(({ links }) => (entry.links = links))
+        .catch(error => { if (linkCache.get(track.key) === entry) linkCache.delete(track.key); throw error; });
+    entry.promise.catch(() => {});
+    linkCache.set(track.key, entry);
+    return entry;
+}
+
+// `platform` null: el primero (el de lo que suena)
+function pickLink(links, platform) {
+    const link = platform ? links.find(item => item.platform === platform) : links[0];
+    if (!link) throw new NoLink();
+    return link.url;
+}
+
+// El enlace ya, si está; si no, se espera (con aviso). null si no hay.
+async function linkFor(track, platform) {
+    const entry = linksOf(track);
+    try {
+        if (entry.links) return pickLink(entry.links, platform);
+        toast('Buscando el enlace…');
+        return pickLink(await entry.promise, platform);
+    } catch (error) {
+        toast(error instanceof NoLink
+            ? (platform === 'youtube' ? 'No se ha encontrado en YouTube.' : 'Esta canción no tiene enlace.')
+            : 'No se pudo sacar el enlace. Prueba otra vez.');
+        return null;
+    }
+}
+
+async function writeClipboard(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        // Sin permiso para el portapapeles moderno: el método de siempre, con un campo de texto
+        const area = h('textarea', { readonly: true, style: 'position:fixed;top:0;left:0;opacity:0' });
+        area.value = text;
+        document.body.append(area);
+        area.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch { ok = false; }
+        area.remove();
+        return ok;
+    }
+}
+
+const shareTitle = track => [track.title, track.artist].filter(Boolean).join(' — ');
+
+async function copyLink(track, platform = null) {
+    const url = await linkFor(track, platform);
+    if (!url) return;
+    if (await writeClipboard(url)) return toast('Enlace copiado');
+    showLink(track, url);
+}
+
+async function shareLink(track, platform = null) {
+    const url = await linkFor(track, platform);
+    if (!url) return;
+    try {
+        await navigator.share({ title: shareTitle(track), url });
+    } catch (error) {
+        if (error?.name !== 'AbortError') showLink(track, url);
+    }
+}
+
+// «Compartir…» en una de Spotify: primero se elige cuál de los dos enlaces
+function shareChooser(track) {
+    linksOf(track);
+    openModal(close => [
+        h('h2', null, 'Compartir'),
+        h('p.note', null, track.title),
+        h('div.picks', null, ['spotify', 'youtube'].map(platform => h('button.pick', { type: 'button', onclick: () => { close(); run(() => shareLink(track, platform)); } },
+            icon('link'), h('div.tx', null, h('b', null, `Enlace de ${PLATFORM_NAME[platform]}`))))),
+        h('div.acts', null, h('button.btn', { type: 'button', onclick: close }, 'Cancelar')),
+    ]);
+}
+
+// El navegador no dejó copiar o compartir sin otro toque: se enseña el enlace con sus botones
+function showLink(track, url) {
+    openModal(close => {
+        const field = h('input.in.linkin', { type: 'text', value: url, readonly: true, spellcheck: false, onfocus: event => event.target.select() });
+        return [
+            h('h2', null, 'Enlace de la canción'),
+            h('p.note', null, track.title),
+            field,
+            h('div.acts', null,
+                h('button.btn', { type: 'button', onclick: close }, 'Cerrar'),
+                canShare() && h('button.btn', { type: 'button', onclick: () => run(async () => {
+                    try { await navigator.share({ title: shareTitle(track), url }); close(); } catch (error) { if (error?.name !== 'AbortError') toast('No se pudo compartir.'); }
+                }) }, 'Compartir'),
+                h('button.btn.pri', { type: 'button', onclick: () => run(async () => {
+                    field.select();
+                    if (await writeClipboard(url)) { toast('Enlace copiado'); close(); } else toast('Mantén pulsado el enlace para copiarlo.');
+                }) }, 'Copiar')),
+        ];
+    });
+}
+
+/** Las opciones del enlace en el menú de una canción. */
+function linkItems(track) {
+    linksOf(track);
+    const spotify = track.key.startsWith('sp:');
+    const items = spotify
+        ? [
+            { label: 'Copiar enlace de Spotify', icon: 'link', run: () => copyLink(track, 'spotify') },
+            { label: 'Copiar enlace de YouTube', icon: 'link', run: () => copyLink(track, 'youtube') },
+        ]
+        : [{ label: 'Copiar enlace', icon: 'link', run: () => copyLink(track) }];
+    if (canShare()) items.push({ label: 'Compartir…', icon: 'share', run: () => (spotify ? shareChooser(track) : shareLink(track)) });
     return items;
 }
 

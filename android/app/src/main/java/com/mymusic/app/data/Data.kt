@@ -68,6 +68,9 @@ data class SearchResponse(val results: List<Track>, val hint: String?, val artis
 /** Un artista tal como sale en una fila (Buscar, «parecidos», «Ir al artista»). `listeners`: «4,1 M». */
 data class ArtistCard(val id: String, val name: String, val listeners: String?, val thumb: String?)
 
+/** Un enlace de una canción para copiar o compartir (§22): `platform` es youtube, spotify o soundcloud. */
+data class SongLink(val platform: String, val url: String)
+
 /** Un disco, sencillo o EP. `kind`: album | single | ep. */
 data class Release(val id: String, val title: String, val kind: String, val year: Int?, val thumb: String?)
 
@@ -698,6 +701,17 @@ class Api(private val prefs: Prefs) {
     suspend fun artistsOf(track: Track): List<ArtistCard> =
         call("GET", "/api/artists/of?key=${enc(track.key)}&title=${enc(track.title)}&artist=${enc(track.artist.orEmpty())}", readTimeoutMs = 60_000)
             .optJSONArray("artists").artistCards()
+
+    // --- Copiar y compartir el enlace de una canción (§22) ---
+
+    /** El enlace de lo que suena y, en las de Spotify, también el de Spotify (primero). */
+    suspend fun links(key: String): List<SongLink> {
+        val array = call("GET", "/api/links/${enc(key)}", readTimeoutMs = 60_000).optJSONArray("links") ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val o = array.optJSONObject(index) ?: return@mapNotNull null
+            SongLink(o.optString("platform"), o.optString("url")).takeIf { it.url.startsWith("https://") }
+        }
+    }
 
     // --- Artistas que sigues y novedades (§21) ---
 

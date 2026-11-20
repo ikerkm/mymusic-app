@@ -24,6 +24,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.ui.draw.alpha
@@ -106,7 +107,10 @@ fun artistShown(track: Track): String? {
 fun TrackSheet(vm: AppViewModel, target: SheetTarget) {
     val track = target.track
     val close = { vm.sheet = null }
-    ModalBottomSheet(onDismissRequest = close, containerColor = Mm.Sur) {
+    // Se abre entera: a media altura, las últimas opciones (copiar y compartir el enlace, §22) quedaban
+    // debajo y había que arrastrar la hoja para verlas
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = close, sheetState = state, containerColor = Mm.Sur) {
         SheetWindowFix()
         Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 16.dp)) {
             Row(Modifier.padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -158,6 +162,27 @@ fun TrackSheet(vm: AppViewModel, target: SheetTarget) {
                     vm.goArtistOf(track)
                 }
             }
+            // Copiar y compartir el enlace (§22): el de lo que suena; en las de Spotify, también el de Spotify
+            HorizontalDivider(color = Mm.Line, modifier = Modifier.padding(vertical = 4.dp))
+            if (track.platform == "spotify") {
+                Option(MmIcons.Link, "Copiar enlace de Spotify", "optCopySpotify") {
+                    close()
+                    vm.copyLink(track, "spotify")
+                }
+                Option(MmIcons.Link, "Copiar enlace de YouTube", "optCopyYoutube") {
+                    close()
+                    vm.copyLink(track, "youtube")
+                }
+            } else {
+                Option(MmIcons.Link, "Copiar enlace", "optCopy") {
+                    close()
+                    vm.copyLink(track)
+                }
+            }
+            Option(MmIcons.Share, "Compartir…", "optShare") {
+                close()
+                if (track.platform == "spotify") vm.shareChoice = track else vm.shareLink(track)
+            }
             if (target.listId != null) {
                 HorizontalDivider(color = Mm.Line, modifier = Modifier.padding(vertical = 4.dp))
                 if (track.platform == "spotify") {
@@ -171,6 +196,21 @@ fun TrackSheet(vm: AppViewModel, target: SheetTarget) {
                     vm.removeFromList(target.listId, track)
                 }
             }
+        }
+    }
+}
+
+/** «Compartir…» de una canción de Spotify: se elige cuál de sus dos enlaces (§22). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ShareChoiceSheet(vm: AppViewModel, track: Track) {
+    ModalBottomSheet(onDismissRequest = { vm.shareChoice = null }, containerColor = Mm.Sur) {
+        SheetWindowFix()
+        Column(Modifier.padding(horizontal = 16.dp).padding(bottom = 18.dp)) {
+            Text("Compartir", color = Mm.Tx, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(track.title, color = Mm.Mut, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp))
+            Option(MmIcons.Link, "Enlace de Spotify", "shareSpotify") { vm.shareLink(track, "spotify") }
+            Option(MmIcons.Link, "Enlace de YouTube", "shareYoutube") { vm.shareLink(track, "youtube") }
         }
     }
 }

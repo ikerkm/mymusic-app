@@ -3,6 +3,7 @@ import spotifyUrlInfo from 'spotify-url-info';
 import yts from 'yt-search';
 import { parseLink, youtubeThumb } from './sources.js';
 import { fetchInfo, fetchPlaylist } from './ytdlp.js';
+import { soundcloudPage } from './songlinks.js';
 
 // Lectores de listas y enlaces de fuera. Punto de partida: utils/spotifyHelper.js y
 // ytdlpWrapper.fetchPlaylistInfo del bot (commit a2a4e99). Copia independiente.
@@ -23,6 +24,8 @@ function soundcloudEntry(info) {
         artist: info.uploader ?? info.artist ?? null,
         durationSec: Number.isFinite(info.duration) ? Math.round(info.duration) : null,
         thumb: typeof info.thumbnail === 'string' ? info.thumbnail : null,
+        // Su página pública, para copiar y compartir el enlace (§22); no entra en las listas
+        link: soundcloudPage(info.webpage_url),
     };
 }
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
@@ -85,6 +88,11 @@ export const importers = {
 
     async soundcloudTrack({ user, slug }) {
         return soundcloudEntry(await fetchInfo(`https://soundcloud.com/${user}/${slug}`));
+    },
+
+    // La página pública de una canción de SoundCloud a partir de su número (§22). Solo lee sus datos.
+    async soundcloudLink(id) {
+        return soundcloudPage((await fetchInfo(`https://api.soundcloud.com/tracks/${id}`)).webpage_url);
     },
 
     // Leer una lista de SoundCloud con sus títulos cuesta unos 0,7 s por canción (medido el 2026-11-16),

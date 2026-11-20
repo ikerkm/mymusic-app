@@ -1,6 +1,9 @@
 package com.mymusic.app
 
 import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.compose.runtime.getValue
@@ -35,6 +38,7 @@ import com.mymusic.app.data.Novedades
 import com.mymusic.app.data.Prefs
 import com.mymusic.app.data.ProbeResult
 import com.mymusic.app.data.SessionView
+import com.mymusic.app.data.SongLink
 import com.mymusic.app.data.Stats
 import com.mymusic.app.data.Track
 import com.mymusic.app.data.Trash
@@ -208,6 +212,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val albumPages = mutableStateMapOf<String, AlbumPage>()
     val pageErrors = mutableStateMapOf<String, String>()               // «artist:<id>», «songs:<id>», «album:<id>» → mensaje
     var artistChoice by mutableStateOf<ArtistChoice?>(null)
+    var shareChoice by mutableStateOf<Track?>(null)                   // «Compartir…» de una de Spotify: se elige cuál de los dos
     var saveAlbumFor by mutableStateOf<AlbumPage?>(null)               // disco que se está guardando como lista
     var artistRadioStarting by mutableStateOf<String?>(null)           // id del artista cuya radio se está buscando
         private set
@@ -678,6 +683,55 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 notice = "Sin conexión con el servidor."
             }
+        }
+    }
+
+    // --- Copiar y compartir el enlace de una canción (§22) ---
+    // El de lo que suena (YouTube o la página de SoundCloud); en las de Spotify, además el de Spotify. Lo da
+    // el servidor: la página de una de SoundCloud la busca la primera vez (unos segundos).
+
+    private val linkCache = mutableMapOf<String, Pair<Long, List<SongLink>>>()
+
+    /** El enlace pedido (`platform` null: el de lo que suena), o null con su aviso. */
+    private suspend fun linkOf(track: Track, platform: String?): String? {
+        val cached = linkCache[track.key]?.takeIf { System.currentTimeMillis() - it.first < 5 * 60_000 }?.second
+        val links = cached ?: try {
+            notice = "Buscando el enlace…"
+            api.links(track.key).also { linkCache[track.key] = System.currentTimeMillis() to it }
+        } catch (e: ApiException) {
+            if (e.status == 401) logout(EXPIRED) else notice = "No se pudo sacar el enlace. Prueba otra vez."
+            return null
+        } catch (e: Exception) {
+            notice = "Sin conexión con el servidor."
+            return null
+        }
+        val link = if (platform == null) links.firstOrNull() else links.firstOrNull { it.platform == platform }
+        if (link == null) notice = if (platform == "youtube") "No se ha encontrado en YouTube." else "Esta canción no tiene enlace."
+        return link?.url
+    }
+
+    fun copyLink(track: Track, platform: String? = null) {
+        viewModelScope.launch {
+            val url = linkOf(track, platform) ?: return@launch
+            val clipboard = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText(track.title, url))
+            // Desde Android 13 el propio sistema avisa de lo copiado
+            notice = if (Build.VERSION.SDK_INT < 33) "Enlace copiado" else null
+        }
+    }
+
+    /** Abre el menú de compartir del sistema (WhatsApp, Telegram…) con el enlace. */
+    fun shareLink(track: Track, platform: String? = null) {
+        shareChoice = null
+        viewModelScope.launch {
+            val url = linkOf(track, platform) ?: return@launch
+            notice = null
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, url)
+                putExtra(Intent.EXTRA_SUBJECT, listOfNotNull(track.title, track.artist).joinToString(" — "))
+            }
+            getApplication<Application>().startActivity(Intent.createChooser(send, "Compartir canción").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }
 

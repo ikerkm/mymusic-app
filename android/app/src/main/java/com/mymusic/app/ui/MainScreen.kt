@@ -135,6 +135,7 @@ fun MainScreen(vm: AppViewModel) {
         vm.saveAutoFor?.let { SaveAutoSheet(vm, it) }
         vm.saveAlbumFor?.let { SaveAlbumSheet(vm, it) }
         vm.artistChoice?.let { ArtistChoiceSheet(vm, it) }
+        vm.shareChoice?.let { ShareChoiceSheet(vm, it) }
         vm.failureFor?.let { FailureSheet(vm, it) }
         vm.alternateFor?.let { AlternateSheet(vm, it) }
         Notice(vm, Modifier.align(Alignment.BottomCenter))

@@ -180,6 +180,7 @@ td.a{color:var(--mut)}
 .pick small{color:var(--mut)}
 .pick.cur{outline:1px solid #9d8cff77}
 .picks{margin-top:10px;max-height:340px;overflow-y:auto}
+.modal .linkin{width:100%;margin-top:10px;font-size:14px}
 .rowline{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
 .rowline:last-of-type{border-bottom:0}
 .danger{color:var(--yt)}

@@ -14,6 +14,7 @@ import { Usage } from './usage.js';
 import { fetchPlaylist, openAudio } from './ytdlp.js';
 import { YtMusic, createYtMusicClient } from './ytmusic.js';
 import { AlternateStore } from './failures.js';
+import { SongLinkStore } from './songlinks.js';
 import { ReleaseWatch } from './follows.js';
 
 dotenv.config({ path: join(config.root, '.env') });
@@ -61,6 +62,8 @@ const app = createApp({
     releases,
     // «Otro enlace» de las canciones que fallan (§19): común a todos los usuarios
     alternates: new AlternateStore(config.dataDir),
+    // Páginas de SoundCloud para copiar y compartir el enlace (§22): comunes a todos
+    songLinks: new SongLinkStore(config.dataDir),
     webDir: config.webDir,
     prefetchDelayMs: config.prefetchDelayMs,
     version: config.version,
