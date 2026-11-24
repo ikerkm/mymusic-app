@@ -106,8 +106,8 @@ test('el servidor entrega las páginas del panel con sus cabeceras de seguridad'
         assert.equal(page.headers.get('cache-control'), 'no-cache');
         assert.match(await page.text(), /<script type="module" src="app\.js">/);
 
-        // Iconos: el del usuario (favicon, pantalla de inicio, logo) y el antiguo, que se sigue sirviendo
-        for (const [file, type] of [['app.js', /javascript/], ['style.css', /text\/css/], ['icon.svg', /svg/], ['favicon-32.png', /image\/png/], ['apple-touch-icon.png', /image\/png/], ['icon-192.png', /image\/png/]]) {
+        // Icono del panel
+        for (const [file, type] of [['app.js', /javascript/], ['style.css', /text\/css/], ['icon.svg', /svg/]]) {
             const res = await s.api(`/${file}`);
             assert.equal(res.status, 200, file);
             assert.match(res.headers.get('content-type'), type);

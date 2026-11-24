@@ -1907,7 +1907,7 @@ function renderSide() {
     if (!ui) return;
     const view = st.view;
     ui.side.replaceChildren(
-        h('div.brand', null, h('img.brandimg', { src: 'icon-192.png', alt: '' }), 'MyMusic'),
+        h('div.brand', null, h('img.brandimg', { src: 'icon.svg', alt: '' }), 'MyMusic'),
         h('button.nav', { type: 'button', class: ['home', 'history', 'auto', 'stats', 'novedades'].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'home' }) }, icon('home'), 'Inicio'),
         h('button.nav', { type: 'button', class: ['search', ...ARTIST_VIEWS].includes(view.name) ? 'on' : '', onclick: () => go({ name: 'search' }) }, icon('search'), 'Buscar'),
         // Artistas que sigues (§21): en el escritorio, aquí; en pantalla estrecha, la pestaña «Artistas» dentro de Listas
@@ -3122,7 +3122,7 @@ function showLogin(message = null) {
             submit.disabled = false;
         }
     } },
-        h('img.logo', { src: 'icon-192.png', alt: '' }),
+        h('img.logo', { src: 'icon.svg', alt: '' }),
         h('h1', null, 'MyMusic'),
         h('div.mut', null, 'Tu música, desde tu servidor'),
         h('label', null, 'Usuario'), user,
